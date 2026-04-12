@@ -1,0 +1,38 @@
+###############################################################################
+# Set default behavior to automatically normalize line endings.
+###############################################################################
+* text=auto
+
+###############################################################################
+# Override for specific file types
+###############################################################################
+
+# Source code
+*.cs text diff=csharp
+*.csproj text
+*.sln text eol=crlf
+*.xml text
+*.json text
+*.yaml text
+*.yml text
+*.md text
+*.txt text
+
+# Shell scripts must use LF
+*.sh text eol=lf
+
+# Windows-specific files
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.dll binary
+*.exe binary
+*.pdb binary
+*.nupkg binary
