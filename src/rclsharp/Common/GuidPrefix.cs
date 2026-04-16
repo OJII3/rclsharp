@@ -47,6 +47,13 @@ public struct GuidPrefix : IEquatable<GuidPrefix>
 
     private static int s_instanceCounter;
     private static readonly uint s_processSeed = unchecked((uint)new Random().Next());
+    private static readonly uint s_cachedPid = GetCurrentProcessId();
+
+    private static uint GetCurrentProcessId()
+    {
+        using var p = System.Diagnostics.Process.GetCurrentProcess();
+        return unchecked((uint)p.Id);
+    }
 
     /// <summary>
     /// 現在のプロセス固有の GuidPrefix を生成する。
@@ -56,7 +63,7 @@ public struct GuidPrefix : IEquatable<GuidPrefix>
     public static GuidPrefix CreateForCurrentProcess(VendorId vendorId)
     {
         uint hostId = unchecked((uint)Environment.MachineName.GetHashCode());
-        uint pid = unchecked((uint)System.Diagnostics.Process.GetCurrentProcess().Id ^ s_processSeed);
+        uint pid = s_cachedPid ^ s_processSeed;
         ushort counter = unchecked((ushort)Interlocked.Increment(ref s_instanceCounter));
         return Create(vendorId, hostId, pid, counter);
     }
