@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
+using System.Text;
 
 namespace Rclsharp.Cdr;
 
@@ -175,5 +176,38 @@ public ref struct CdrReader
         }
         EnsureAvailable(count);
         _position += count;
+    }
+
+    /// <summary>
+    /// CDR string を読み出す。
+    /// 形式: uint32 length(NUL を含む) + UTF-8 バイト列 + NUL バイト。
+    /// 戻り値は NUL を除いた文字列。
+    /// </summary>
+    public string ReadString()
+    {
+        uint length = ReadUInt32();
+        if (length == 0)
+        {
+            // 仕様外だが防御的に空文字を返す
+            return string.Empty;
+        }
+        EnsureAvailable((int)length);
+        // length は NUL 終端を含む
+        int payloadLength = (int)length - 1;
+        ReadOnlySpan<byte> payload = _buffer.Slice(_position, payloadLength);
+        _position += (int)length; // NUL 含めて進める
+        return payloadLength == 0 ? string.Empty : Encoding.UTF8.GetString(payload);
+    }
+
+    /// <summary>シーケンス長 (uint32) を読み出す。</summary>
+    public int ReadSequenceLength()
+    {
+        uint length = ReadUInt32();
+        if (length > int.MaxValue)
+        {
+            throw new InvalidOperationException(
+                $"Sequence length {length} exceeds Int32.MaxValue.");
+        }
+        return (int)length;
     }
 }

@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
+using System.Text;
 
 namespace Rclsharp.Cdr;
 
@@ -206,5 +207,38 @@ public ref struct CdrWriter
         EnsureAvailable(bytes.Length);
         bytes.CopyTo(_buffer.Slice(_position));
         _position += bytes.Length;
+    }
+
+    /// <summary>
+    /// CDR string を書き込む。
+    /// 形式: uint32 length(NUL を含む) + UTF-8 バイト列 + NUL バイト。
+    /// 後続フィールドの整列はこの関数では行わない (次の Write* で必要に応じて調整される)。
+    /// </summary>
+    public void WriteString(ReadOnlySpan<char> value)
+    {
+        int byteCount = value.IsEmpty ? 0 : Encoding.UTF8.GetByteCount(value);
+        uint length = (uint)(byteCount + 1); // include NUL terminator
+        WriteUInt32(length);
+        EnsureAvailable(byteCount + 1);
+        if (byteCount > 0)
+        {
+            int written = Encoding.UTF8.GetBytes(value, _buffer.Slice(_position));
+            _position += written;
+        }
+        _buffer[_position++] = 0; // NUL terminator
+    }
+
+    public void WriteString(string? value) => WriteString((value ?? string.Empty).AsSpan());
+
+    /// <summary>
+    /// シーケンス長 (uint32) を書き込む。要素本体はこの後に書き込み側が個別に書く。
+    /// </summary>
+    public void WriteSequenceLength(int length)
+    {
+        if (length < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(length), "Sequence length must be non-negative.");
+        }
+        WriteUInt32((uint)length);
     }
 }
