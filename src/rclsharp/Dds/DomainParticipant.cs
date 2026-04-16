@@ -1,6 +1,10 @@
 using System.Net;
+using Rclsharp.Cdr;
 using Rclsharp.Common;
 using Rclsharp.Discovery;
+using Rclsharp.Rcl.Naming;
+using Rclsharp.Rtps.Reader;
+using Rclsharp.Rtps.Writer;
 using Rclsharp.Transport;
 
 using Guid = Rclsharp.Common.Guid;
@@ -173,6 +177,57 @@ public sealed class DomainParticipant : IDisposable
         data.DefaultMulticastLocators.Add(_defaultMulticastLocator);
         return data;
     }
+
+    /// <summary>
+    /// 指定トピックの Publisher を生成する。
+    /// EntityId は <see cref="UserEntityIdAllocator"/> によりトピック名から決定論的に割り当てる
+    /// (SEDP 未実装の Phase 5 ではこれが Pub/Sub matching の手段)。
+    /// </summary>
+    public Publisher<T> CreatePublisher<T>(string topicName, ICdrSerializer<T> serializer)
+    {
+        ThrowIfDisposed();
+        ArgumentException.ThrowIfNullOrEmpty(topicName);
+        ArgumentNullException.ThrowIfNull(serializer);
+
+        var ddsTopic = TopicNameMangler.MangleTopic(topicName);
+        var writerEntityId = UserEntityIdAllocator.WriterFor(ddsTopic);
+        var writer = new StatelessWriter(
+            _userMulticastTransport,
+            _userMulticastDestination,
+            _options.ProtocolVersion,
+            _options.VendorId,
+            GuidPrefix,
+            writerEntityId,
+            _options.Logger);
+        return new Publisher<T>(topicName, writer, serializer);
+    }
+
+    /// <summary>
+    /// 指定トピックの Subscription を生成する。
+    /// 受信ループは即座に開始され、マッチする DATA を受信するとハンドラが呼ばれる。
+    /// </summary>
+    public Subscription<T> CreateSubscription<T>(
+        string topicName,
+        ICdrSerializer<T> serializer,
+        Action<T, GuidPrefix> handler)
+    {
+        ThrowIfDisposed();
+        ArgumentException.ThrowIfNullOrEmpty(topicName);
+        ArgumentNullException.ThrowIfNull(serializer);
+        ArgumentNullException.ThrowIfNull(handler);
+
+        var ddsTopic = TopicNameMangler.MangleTopic(topicName);
+        var writerEntityId = UserEntityIdAllocator.WriterFor(ddsTopic);
+        var reader = new StatelessReader(_userMulticastTransport, writerEntityId, _options.Logger);
+        return new Subscription<T>(topicName, reader, serializer, handler);
+    }
+
+    /// <summary>ハンドラが GuidPrefix を必要としない場合のショートカット。</summary>
+    public Subscription<T> CreateSubscription<T>(
+        string topicName,
+        ICdrSerializer<T> serializer,
+        Action<T> handler)
+        => CreateSubscription<T>(topicName, serializer, (value, _) => handler(value));
 
     public void Dispose()
     {
