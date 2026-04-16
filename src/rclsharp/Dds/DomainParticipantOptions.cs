@@ -48,4 +48,9 @@ public sealed class DomainParticipantOptions
     /// テスト用の差し替えポイント。null なら <see cref="UdpTransport.CreateUnicast"/> で作る。
     /// </summary>
     public IRtpsTransport? CustomUnicastTransport { get; init; }
+
+    /// <summary>
+    /// ユーザートピック用 multicast transport の差し替えポイント (Phase 5)。null なら自動生成。
+    /// </summary>
+    public IRtpsTransport? CustomUserMulticastTransport { get; init; }
 }
