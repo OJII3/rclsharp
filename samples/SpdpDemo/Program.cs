@@ -25,6 +25,7 @@ var options = new DomainParticipantOptions
     EntityName = entityName,
     Logger = logger,
     LocalUnicastAddress = IPAddress.Loopback,
+    MulticastInterface = IPAddress.Loopback,
     SpdpInterval = TimeSpan.FromSeconds(3),
 };
 

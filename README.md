@@ -34,6 +34,19 @@ dotnet test
 dotnet run --project samples/SpdpDemo -- 0 1 rclsharp_demo
 ```
 
+## サンプル: Talker / Listener
+
+`/chatter` トピック (std_msgs/String) で文字列を送受信します。別シェルで起動してください。
+
+```sh
+# listener
+dotnet run --project samples/TalkerListener -- listener
+# talker
+dotnet run --project samples/TalkerListener -- talker
+```
+
+listener 側に `I heard: 'Hello rclsharp: N'` が出れば OK。
+
 ## ROS 2 との相互検出確認 (loopback)
 
 別シェルで ROS 2 talker を起動:
