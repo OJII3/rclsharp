@@ -1,15 +1,19 @@
 using Rclsharp.Common;
 
+using Guid = Rclsharp.Common.Guid;
+
 namespace Rclsharp.Discovery;
 
 /// <summary>
-/// 検出した remote Participant を Guid 単位で保持するスレッドセーフな DB。
-/// SPDP 受信側から <see cref="UpsertParticipant"/> で更新、定期 sweeper から <see cref="ExpireOldParticipants"/>。
+/// 検出した remote Participant と endpoint を保持するスレッドセーフな DB。
+/// SPDP 受信側から <see cref="UpsertParticipant"/>、SEDP 受信側から <see cref="UpsertEndpoint"/>。
 /// </summary>
 public sealed class DiscoveryDb
 {
     private readonly object _lock = new();
     private readonly Dictionary<GuidPrefix, RemoteParticipant> _participants = new();
+    private readonly Dictionary<Guid, RemoteEndpoint> _writers = new();
+    private readonly Dictionary<Guid, RemoteEndpoint> _readers = new();
 
     /// <summary>新規参加者検出時に発火 (lock 外で呼ばれる)。</summary>
     public event Action<RemoteParticipant>? ParticipantDiscovered;
@@ -19,6 +23,15 @@ public sealed class DiscoveryDb
 
     /// <summary>Lease 期限切れで削除されたときに発火 (lock 外で呼ばれる)。</summary>
     public event Action<RemoteParticipant>? ParticipantLost;
+
+    /// <summary>新規 remote Writer 検出時。</summary>
+    public event Action<RemoteEndpoint>? WriterDiscovered;
+
+    /// <summary>新規 remote Reader 検出時。</summary>
+    public event Action<RemoteEndpoint>? ReaderDiscovered;
+
+    /// <summary>endpoint が更新されたとき (Writer/Reader 共通)。</summary>
+    public event Action<RemoteEndpoint>? EndpointUpdated;
 
     /// <summary>現在登録されている Participant 数。</summary>
     public int Count
@@ -123,5 +136,76 @@ public sealed class DiscoveryDb
             ParticipantLost?.Invoke(removed);
         }
         return true;
+    }
+
+    /// <summary>
+    /// SEDP 受信時に呼ぶ。新規なら追加して Discovered イベント、既存なら Update で EndpointUpdated。
+    /// 自分自身の Participant prefix と一致するものは無視する。
+    /// </summary>
+    public void UpsertEndpoint(DiscoveredEndpointData data, DateTime nowUtc, GuidPrefix? ignorePrefix = null)
+    {
+        if (ignorePrefix.HasValue && data.EndpointGuid.Prefix.Equals(ignorePrefix.Value))
+        {
+            return;
+        }
+
+        var dict = data.Kind == EndpointKind.Writer ? _writers : _readers;
+        RemoteEndpoint endpoint;
+        bool isNew;
+        lock (_lock)
+        {
+            if (dict.TryGetValue(data.EndpointGuid, out var existing))
+            {
+                existing.Update(data, nowUtc);
+                endpoint = existing;
+                isNew = false;
+            }
+            else
+            {
+                endpoint = new RemoteEndpoint(data, nowUtc);
+                dict[data.EndpointGuid] = endpoint;
+                isNew = true;
+            }
+        }
+
+        if (isNew)
+        {
+            if (data.Kind == EndpointKind.Writer)
+            {
+                WriterDiscovered?.Invoke(endpoint);
+            }
+            else
+            {
+                ReaderDiscovered?.Invoke(endpoint);
+            }
+        }
+        else
+        {
+            EndpointUpdated?.Invoke(endpoint);
+        }
+    }
+
+    /// <summary>登録されている Writer 数。</summary>
+    public int WriterCount
+    {
+        get { lock (_lock) { return _writers.Count; } }
+    }
+
+    /// <summary>登録されている Reader 数。</summary>
+    public int ReaderCount
+    {
+        get { lock (_lock) { return _readers.Count; } }
+    }
+
+    /// <summary>登録されている Writer のスナップショット。</summary>
+    public IReadOnlyList<RemoteEndpoint> WriterSnapshot()
+    {
+        lock (_lock) { return _writers.Values.ToArray(); }
+    }
+
+    /// <summary>登録されている Reader のスナップショット。</summary>
+    public IReadOnlyList<RemoteEndpoint> ReaderSnapshot()
+    {
+        lock (_lock) { return _readers.Values.ToArray(); }
     }
 }
