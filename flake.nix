@@ -1,0 +1,41 @@
+{
+  description = "rclsharp dev shell with ROS 2 Humble + .NET 8";
+
+  inputs = {
+    nix-ros-overlay.url = "github:lopsided98/nix-ros-overlay/master";
+    nixpkgs.follows = "nix-ros-overlay/nixpkgs";
+  };
+
+  outputs = { self, nix-ros-overlay, nixpkgs }:
+    nix-ros-overlay.inputs.flake-utils.lib.eachDefaultSystem (system:
+      let
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = [ nix-ros-overlay.overlays.default ];
+        };
+        rosEnv = pkgs.rosPackages.humble.buildEnv {
+          paths = with pkgs.rosPackages.humble; [
+            ros-core
+            demo-nodes-cpp
+          ];
+        };
+      in {
+        devShells.default = pkgs.mkShell {
+          name = "rclsharp";
+          packages = [
+            rosEnv
+            pkgs.colcon
+            pkgs.dotnet-sdk_8
+          ];
+          DOTNET_CLI_TELEMETRY_OPTOUT = "1";
+          DOTNET_NOLOGO = "1";
+        };
+      });
+
+  nixConfig = {
+    extra-substituters = [ "https://ros.cachix.org" ];
+    extra-trusted-public-keys = [
+      "ros.cachix.org-1:dSyZxI8geDCJrwgvCOHDoAfOm5sV1wCPjBkKL+38Rvo="
+    ];
+  };
+}
