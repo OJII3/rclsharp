@@ -45,7 +45,7 @@ public sealed class Int32MultiArraySerializer : ICdrSerializer<Int32MultiArray>
     public void Serialize(ref CdrWriter writer, in Int32MultiArray value)
     {
         MultiArrayLayoutSerializer.Instance.Serialize(ref writer, in value.Layout);
-        var data = value.Data ?? [];
+        var data = value.Data ?? Array.Empty<int>();
         writer.WriteSequenceLength(data.Length);
         foreach (var v in data)
         {
@@ -57,7 +57,7 @@ public sealed class Int32MultiArraySerializer : ICdrSerializer<Int32MultiArray>
     {
         MultiArrayLayoutSerializer.Instance.Deserialize(ref reader, out MultiArrayLayout layout);
         int count = reader.ReadSequenceLength();
-        var data = count == 0 ? [] : new int[count];
+        var data = count == 0 ? Array.Empty<int>() : new int[count];
         for (int i = 0; i < count; i++)
         {
             data[i] = reader.ReadInt32();

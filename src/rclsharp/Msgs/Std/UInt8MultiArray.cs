@@ -44,7 +44,7 @@ public sealed class UInt8MultiArraySerializer : ICdrSerializer<UInt8MultiArray>
     public void Serialize(ref CdrWriter writer, in UInt8MultiArray value)
     {
         MultiArrayLayoutSerializer.Instance.Serialize(ref writer, in value.Layout);
-        var data = value.Data ?? [];
+        var data = value.Data ?? Array.Empty<byte>();
         writer.WriteSequenceLength(data.Length);
         writer.WriteRawBytes(data);
     }
@@ -53,7 +53,7 @@ public sealed class UInt8MultiArraySerializer : ICdrSerializer<UInt8MultiArray>
     {
         MultiArrayLayoutSerializer.Instance.Deserialize(ref reader, out MultiArrayLayout layout);
         int count = reader.ReadSequenceLength();
-        var data = count == 0 ? [] : reader.ReadRawBytes(count).ToArray();
+        var data = count == 0 ? Array.Empty<byte>() : reader.ReadRawBytes(count).ToArray();
         value = new UInt8MultiArray(layout, data);
     }
 

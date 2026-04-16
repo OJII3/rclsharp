@@ -315,6 +315,6 @@ public sealed class StatefulWriter : IDisposable
 
     private void ThrowIfDisposed()
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_disposed) throw new ObjectDisposedException(GetType().Name);
     }
 }

@@ -175,13 +175,14 @@ public ref struct CdrWriter
     {
         AlignTo(4);
         EnsureAvailable(4);
+        int bits = BitConverter.SingleToInt32Bits(value);
         if (Endianness == CdrEndianness.LittleEndian)
         {
-            BinaryPrimitives.WriteSingleLittleEndian(_buffer.Slice(_position), value);
+            BinaryPrimitives.WriteInt32LittleEndian(_buffer.Slice(_position), bits);
         }
         else
         {
-            BinaryPrimitives.WriteSingleBigEndian(_buffer.Slice(_position), value);
+            BinaryPrimitives.WriteInt32BigEndian(_buffer.Slice(_position), bits);
         }
         _position += 4;
     }
@@ -190,13 +191,14 @@ public ref struct CdrWriter
     {
         AlignTo(8);
         EnsureAvailable(8);
+        long bits = BitConverter.DoubleToInt64Bits(value);
         if (Endianness == CdrEndianness.LittleEndian)
         {
-            BinaryPrimitives.WriteDoubleLittleEndian(_buffer.Slice(_position), value);
+            BinaryPrimitives.WriteInt64LittleEndian(_buffer.Slice(_position), bits);
         }
         else
         {
-            BinaryPrimitives.WriteDoubleBigEndian(_buffer.Slice(_position), value);
+            BinaryPrimitives.WriteInt64BigEndian(_buffer.Slice(_position), bits);
         }
         _position += 8;
     }

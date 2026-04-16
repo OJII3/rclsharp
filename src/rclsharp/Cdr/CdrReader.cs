@@ -136,22 +136,22 @@ public ref struct CdrReader
     {
         AlignTo(4);
         EnsureAvailable(4);
-        float value = Endianness == CdrEndianness.LittleEndian
-            ? BinaryPrimitives.ReadSingleLittleEndian(_buffer.Slice(_position))
-            : BinaryPrimitives.ReadSingleBigEndian(_buffer.Slice(_position));
+        int bits = Endianness == CdrEndianness.LittleEndian
+            ? BinaryPrimitives.ReadInt32LittleEndian(_buffer.Slice(_position))
+            : BinaryPrimitives.ReadInt32BigEndian(_buffer.Slice(_position));
         _position += 4;
-        return value;
+        return BitConverter.Int32BitsToSingle(bits);
     }
 
     public double ReadDouble()
     {
         AlignTo(8);
         EnsureAvailable(8);
-        double value = Endianness == CdrEndianness.LittleEndian
-            ? BinaryPrimitives.ReadDoubleLittleEndian(_buffer.Slice(_position))
-            : BinaryPrimitives.ReadDoubleBigEndian(_buffer.Slice(_position));
+        long bits = Endianness == CdrEndianness.LittleEndian
+            ? BinaryPrimitives.ReadInt64LittleEndian(_buffer.Slice(_position))
+            : BinaryPrimitives.ReadInt64BigEndian(_buffer.Slice(_position));
         _position += 8;
-        return value;
+        return BitConverter.Int64BitsToDouble(bits);
     }
 
     /// <summary>整列なし・指定バイト数を生で読み出す。返却 Span は内部バッファのスライス (寿命は呼び出し中)。</summary>

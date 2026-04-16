@@ -45,7 +45,7 @@ public sealed class UInt64MultiArraySerializer : ICdrSerializer<UInt64MultiArray
     public void Serialize(ref CdrWriter writer, in UInt64MultiArray value)
     {
         MultiArrayLayoutSerializer.Instance.Serialize(ref writer, in value.Layout);
-        var data = value.Data ?? [];
+        var data = value.Data ?? Array.Empty<ulong>();
         writer.WriteSequenceLength(data.Length);
         foreach (var v in data)
         {
@@ -57,7 +57,7 @@ public sealed class UInt64MultiArraySerializer : ICdrSerializer<UInt64MultiArray
     {
         MultiArrayLayoutSerializer.Instance.Deserialize(ref reader, out MultiArrayLayout layout);
         int count = reader.ReadSequenceLength();
-        var data = count == 0 ? [] : new ulong[count];
+        var data = count == 0 ? Array.Empty<ulong>() : new ulong[count];
         for (int i = 0; i < count; i++)
         {
             data[i] = reader.ReadUInt64();

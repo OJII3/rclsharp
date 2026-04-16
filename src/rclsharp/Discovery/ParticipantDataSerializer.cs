@@ -22,38 +22,38 @@ public static class ParticipantDataSerializer
 
         // PROTOCOL_VERSION (2B + 2B pad)
         pl.BeginParameter(ParameterId.ProtocolVersion);
-        pl.Inner.WriteByte(data.ProtocolVersion.Major);
-        pl.Inner.WriteByte(data.ProtocolVersion.Minor);
+        pl.WriteByte(data.ProtocolVersion.Major);
+        pl.WriteByte(data.ProtocolVersion.Minor);
         pl.EndParameter();
 
         // VENDORID (2B + 2B pad)
         pl.BeginParameter(ParameterId.VendorId);
-        pl.Inner.WriteByte(data.VendorId.V0);
-        pl.Inner.WriteByte(data.VendorId.V1);
+        pl.WriteByte(data.VendorId.V0);
+        pl.WriteByte(data.VendorId.V1);
         pl.EndParameter();
 
         // PARTICIPANT_GUID (16B)
         pl.BeginParameter(ParameterId.ParticipantGuid);
         var guidBytes = new byte[Guid.Size];
         data.Guid.WriteTo(guidBytes);
-        pl.Inner.WriteRawBytes(guidBytes);
+        pl.WriteRawBytes(guidBytes);
         pl.EndParameter();
 
         // BUILTIN_ENDPOINT_SET (4B)
         pl.BeginParameter(ParameterId.BuiltinEndpointSet);
-        pl.Inner.WriteUInt32((uint)data.BuiltinEndpoints);
+        pl.WriteUInt32((uint)data.BuiltinEndpoints);
         pl.EndParameter();
 
         // PARTICIPANT_LEASE_DURATION (8B Duration_t)
         pl.BeginParameter(ParameterId.ParticipantLeaseDuration);
         var durationBytes = new byte[Duration.Size];
         data.LeaseDuration.WriteTo(durationBytes, littleEndian);
-        pl.Inner.WriteRawBytes(durationBytes);
+        pl.WriteRawBytes(durationBytes);
         pl.EndParameter();
 
         // EXPECTS_INLINE_QOS (1B bool + 3B pad)
         pl.BeginParameter(ParameterId.ExpectsInlineQos);
-        pl.Inner.WriteBool(data.ExpectsInlineQos);
+        pl.WriteBool(data.ExpectsInlineQos);
         pl.EndParameter();
 
         WriteLocators(ref pl, ParameterId.MetatrafficUnicastLocator, data.MetatrafficUnicastLocators, littleEndian);
@@ -65,14 +65,15 @@ public static class ParticipantDataSerializer
         if (!string.IsNullOrEmpty(data.EntityName))
         {
             pl.BeginParameter(ParameterId.EntityName);
-            pl.Inner.WriteString(data.EntityName);
+            pl.WriteString(data.EntityName);
             pl.EndParameter();
         }
 
         pl.WriteSentinel();
 
-        // pl.Inner は ref で同じ writer を指しているので位置は同期している
-        writer = pl.Inner;
+        // pl は内部に CdrWriter のコピーを保持しているため、
+        // 呼び出し元の writer を進めるには明示的に受け戻す。
+        writer = pl.CurrentWriter;
     }
 
     private static void WriteLocators(ref ParameterListWriter pl, ushort pid, List<Locator> locators, bool littleEndian)
@@ -82,7 +83,7 @@ public static class ParticipantDataSerializer
             pl.BeginParameter(pid);
             var bytes = new byte[Locator.Size];
             loc.WriteTo(bytes, littleEndian);
-            pl.Inner.WriteRawBytes(bytes);
+            pl.WriteRawBytes(bytes);
             pl.EndParameter();
         }
     }
@@ -102,11 +103,11 @@ public static class ParticipantDataSerializer
             switch (ParameterId.StripFlags(pid))
             {
                 case ParameterId.ProtocolVersion:
-                    data.ProtocolVersion = new ProtocolVersion(pl.Inner.ReadByte(), pl.Inner.ReadByte());
+                    data.ProtocolVersion = new ProtocolVersion(pl.ReadByte(), pl.ReadByte());
                     break;
 
                 case ParameterId.VendorId:
-                    data.VendorId = new VendorId(pl.Inner.ReadByte(), pl.Inner.ReadByte());
+                    data.VendorId = new VendorId(pl.ReadByte(), pl.ReadByte());
                     break;
 
                 case ParameterId.ParticipantGuid:
@@ -120,7 +121,7 @@ public static class ParticipantDataSerializer
                     }
 
                 case ParameterId.BuiltinEndpointSet:
-                    data.BuiltinEndpoints = (BuiltinEndpointSet)pl.Inner.ReadUInt32();
+                    data.BuiltinEndpoints = (BuiltinEndpointSet)pl.ReadUInt32();
                     break;
 
                 case ParameterId.ParticipantLeaseDuration:
@@ -134,7 +135,7 @@ public static class ParticipantDataSerializer
                     }
 
                 case ParameterId.ExpectsInlineQos:
-                    data.ExpectsInlineQos = pl.Inner.ReadBool();
+                    data.ExpectsInlineQos = pl.ReadBool();
                     break;
 
                 case ParameterId.MetatrafficUnicastLocator:
@@ -151,7 +152,7 @@ public static class ParticipantDataSerializer
                     break;
 
                 case ParameterId.EntityName:
-                    data.EntityName = pl.Inner.ReadString();
+                    data.EntityName = pl.ReadString();
                     break;
 
                 default:
@@ -160,7 +161,7 @@ public static class ParticipantDataSerializer
             }
         }
 
-        reader = pl.Inner;
+        reader = pl.CurrentReader;
         return data;
     }
 

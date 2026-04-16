@@ -14,7 +14,7 @@ public static class TypeNameMangler
     /// <summary>ROS 2 型名 → DDS 型名へ変換する。</summary>
     public static string MangleType(string rosType)
     {
-        ArgumentException.ThrowIfNullOrEmpty(rosType);
+        if (string.IsNullOrEmpty(rosType)) throw new ArgumentException("Value cannot be null or empty.", nameof(rosType));
         var parts = rosType.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length < 2)
         {
@@ -29,7 +29,7 @@ public static class TypeNameMangler
     /// <summary>DDS 型名 → ROS 2 型名へ変換する。"dds_" と末尾 "_" を除去。</summary>
     public static string DemangleType(string ddsType)
     {
-        ArgumentNullException.ThrowIfNull(ddsType);
+        if (ddsType is null) throw new ArgumentNullException(nameof(ddsType));
         var parts = ddsType.Split("::", StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length < 2 || parts[^2] != "dds_")
         {

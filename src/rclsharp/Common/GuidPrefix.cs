@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Rclsharp.Common;
 
@@ -25,7 +27,7 @@ public struct GuidPrefix : IEquatable<GuidPrefix>
                 $"GuidPrefix requires exactly {Size} bytes, got {source.Length}.", nameof(source));
         }
         _storage = default;
-        source.CopyTo(_storage);
+        source.CopyTo(_storage.AsSpan());
     }
 
     /// <summary>すべて 0 の Unknown GuidPrefix。</summary>
@@ -44,7 +46,14 @@ public struct GuidPrefix : IEquatable<GuidPrefix>
     }
 
     private static int s_instanceCounter;
-    private static readonly uint s_processSeed = unchecked((uint)Random.Shared.Next());
+    private static readonly uint s_processSeed = unchecked((uint)new Random().Next());
+    private static readonly uint s_cachedPid = GetCurrentProcessId();
+
+    private static uint GetCurrentProcessId()
+    {
+        using var p = System.Diagnostics.Process.GetCurrentProcess();
+        return unchecked((uint)p.Id);
+    }
 
     /// <summary>
     /// 現在のプロセス固有の GuidPrefix を生成する。
@@ -54,12 +63,12 @@ public struct GuidPrefix : IEquatable<GuidPrefix>
     public static GuidPrefix CreateForCurrentProcess(VendorId vendorId)
     {
         uint hostId = unchecked((uint)Environment.MachineName.GetHashCode());
-        uint pid = unchecked((uint)Environment.ProcessId ^ s_processSeed);
+        uint pid = s_cachedPid ^ s_processSeed;
         ushort counter = unchecked((ushort)Interlocked.Increment(ref s_instanceCounter));
         return Create(vendorId, hostId, pid, counter);
     }
 
-    public byte this[int index] => _storage[index];
+    public byte this[int index] => _storage.ElementAt(index);
 
     public void CopyTo(Span<byte> destination)
     {
@@ -68,7 +77,7 @@ public struct GuidPrefix : IEquatable<GuidPrefix>
             throw new ArgumentException(
                 $"Destination requires at least {Size} bytes.", nameof(destination));
         }
-        ReadOnlySpan<byte> source = _storage;
+        ReadOnlySpan<byte> source = _storage.AsSpan();
         source.CopyTo(destination);
     }
 
@@ -81,8 +90,8 @@ public struct GuidPrefix : IEquatable<GuidPrefix>
 
     public bool Equals(GuidPrefix other)
     {
-        ReadOnlySpan<byte> a = _storage;
-        ReadOnlySpan<byte> b = other._storage;
+        ReadOnlySpan<byte> a = _storage.AsSpan();
+        ReadOnlySpan<byte> b = other._storage.AsSpan();
         return a.SequenceEqual(b);
     }
 
@@ -91,15 +100,16 @@ public struct GuidPrefix : IEquatable<GuidPrefix>
     public override int GetHashCode()
     {
         var hash = new HashCode();
-        ReadOnlySpan<byte> bytes = _storage;
-        hash.AddBytes(bytes);
+        ReadOnlySpan<byte> bytes = _storage.AsSpan();
+        for (int i = 0; i < bytes.Length; i++)
+            hash.Add(bytes[i]);
         return hash.ToHashCode();
     }
 
     public override string ToString()
     {
-        ReadOnlySpan<byte> bytes = _storage;
-        return Convert.ToHexString(bytes);
+        ReadOnlySpan<byte> bytes = _storage.AsSpan();
+        return HexUtil.ToHexString(bytes);
     }
 
     public static bool operator ==(GuidPrefix left, GuidPrefix right) => left.Equals(right);
@@ -107,10 +117,26 @@ public struct GuidPrefix : IEquatable<GuidPrefix>
 }
 
 /// <summary>
-/// GuidPrefix の 12 バイト固定ストレージ。InlineArray により値型として確保される。
+/// GuidPrefix の 12 バイト固定ストレージ。
+/// 値型として埋め込むため <see cref="StructLayoutAttribute"/> の <c>Size</c> で領域を確保する。
+/// Span アクセスは <see cref="GuidPrefixStorageExtensions"/> のメソッド経由で行う
+/// (<c>ref this</c> extension にすることで <c>[UnscopedRef]</c> 非対応の C# 9/10 コンパイラでも通る)。
 /// </summary>
-[InlineArray(GuidPrefix.Size)]
+[StructLayout(LayoutKind.Sequential, Size = GuidPrefix.Size)]
 internal struct GuidPrefixStorage
 {
-    private byte _element0;
+    internal byte First;
+}
+
+internal static class GuidPrefixStorageExtensions
+{
+    public static Span<byte> AsSpan(ref this GuidPrefixStorage storage)
+        => MemoryMarshal.CreateSpan(ref storage.First, GuidPrefix.Size);
+
+    public static ReadOnlySpan<byte> AsReadOnlySpan(in this GuidPrefixStorage storage)
+        => MemoryMarshal.CreateReadOnlySpan(
+            ref Unsafe.AsRef(in storage).First, GuidPrefix.Size);
+
+    public static byte ElementAt(in this GuidPrefixStorage storage, int index)
+        => storage.AsReadOnlySpan()[index];
 }

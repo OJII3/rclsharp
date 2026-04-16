@@ -33,14 +33,12 @@ public class ParameterListTests
         var w = new CdrWriter(buf, CdrEndianness.LittleEndian);
         var pl = new ParameterListWriter(w);
         pl.BeginParameter(ParameterId.ProtocolVersion);
-        pl.Inner.WriteByte(2);
-        pl.Inner.WriteByte(4);
+        pl.WriteByte(2);
+        pl.WriteByte(4);
         pl.EndParameter();
         pl.WriteSentinel();
 
-        // pl.Inner は ref のため w とは独立
-        // BytesWritten は pl.Inner 側の状態を見る必要がある
-        var written = pl.Inner.WrittenSpan.ToArray();
+        var written = pl.CurrentWriter.WrittenSpan.ToArray();
         // PID=0x0015 LE = [15, 00], length=4 LE = [04, 00], value=[02, 04, 00, 00] (2B + 2B pad)
         // SENTINEL: PID=0x01 LE = [01, 00], length=0 LE = [00, 00]
         written.Should().Equal(
@@ -57,27 +55,27 @@ public class ParameterListTests
         var plw = new ParameterListWriter(w);
 
         plw.BeginParameter(ParameterId.ProtocolVersion);
-        plw.Inner.WriteByte(2);
-        plw.Inner.WriteByte(4);
+        plw.WriteByte(2);
+        plw.WriteByte(4);
         plw.EndParameter();
 
         plw.BeginParameter(ParameterId.VendorId);
-        plw.Inner.WriteByte(0x01);
-        plw.Inner.WriteByte(0x0F);
+        plw.WriteByte(0x01);
+        plw.WriteByte(0x0F);
         plw.EndParameter();
 
         plw.BeginParameter(ParameterId.EntityName);
-        plw.Inner.WriteString("rclsharp_node");
+        plw.WriteString("rclsharp_node");
         plw.EndParameter();
 
         plw.BeginParameter(ParameterId.ParticipantLeaseDuration);
-        plw.Inner.WriteInt32(3); // seconds
-        plw.Inner.WriteUInt32(0); // fraction
+        plw.WriteInt32(3); // seconds
+        plw.WriteUInt32(0); // fraction
         plw.EndParameter();
 
         plw.WriteSentinel();
 
-        var totalLength = plw.Inner.BytesWritten;
+        var totalLength = plw.CurrentWriter.BytesWritten;
         var serialized = buf[..totalLength].ToArray();
 
         // 読み出し
@@ -88,20 +86,20 @@ public class ParameterListTests
         plr.MoveNext(out var pid1, out var len1).Should().BeTrue();
         pid1.Should().Be(ParameterId.ProtocolVersion);
         len1.Should().Be((ushort)4);
-        plr.Inner.ReadByte().Should().Be((byte)2);
-        plr.Inner.ReadByte().Should().Be((byte)4);
+        plr.ReadByte().Should().Be((byte)2);
+        plr.ReadByte().Should().Be((byte)4);
 
         // 2: VENDORID
         plr.MoveNext(out var pid2, out var len2).Should().BeTrue();
         pid2.Should().Be(ParameterId.VendorId);
         len2.Should().Be((ushort)4);
-        plr.Inner.ReadByte().Should().Be((byte)0x01);
-        plr.Inner.ReadByte().Should().Be((byte)0x0F);
+        plr.ReadByte().Should().Be((byte)0x01);
+        plr.ReadByte().Should().Be((byte)0x0F);
 
         // 3: ENTITY_NAME (string)
         plr.MoveNext(out var pid3, out _).Should().BeTrue();
         pid3.Should().Be(ParameterId.EntityName);
-        plr.Inner.ReadString().Should().Be("rclsharp_node");
+        plr.ReadString().Should().Be("rclsharp_node");
 
         // 4: PARTICIPANT_LEASE_DURATION (skipped value)
         plr.MoveNext(out var pid4, out var len4).Should().BeTrue();
@@ -134,7 +132,7 @@ public class ParameterListTests
         var pl = new ParameterListWriter(w);
         pl.WriteSentinel();
 
-        pl.Inner.WrittenSpan.ToArray().Should().Equal(0x01, 0x00, 0x00, 0x00);
+        pl.CurrentWriter.WrittenSpan.ToArray().Should().Equal(0x01, 0x00, 0x00, 0x00);
     }
 
     [Fact]
@@ -144,11 +142,11 @@ public class ParameterListTests
         var w = new CdrWriter(buf, CdrEndianness.LittleEndian);
         var plw = new ParameterListWriter(w);
         plw.BeginParameter(ParameterId.ProtocolVersion);
-        plw.Inner.WriteByte(2);
-        plw.Inner.WriteByte(4);
+        plw.WriteByte(2);
+        plw.WriteByte(4);
         plw.EndParameter();
         plw.WriteSentinel();
-        var serialized = buf[..plw.Inner.BytesWritten].ToArray();
+        var serialized = buf[..plw.CurrentWriter.BytesWritten].ToArray();
 
         var r = new CdrReader(serialized, CdrEndianness.LittleEndian);
         var plr = new ParameterListReader(r);

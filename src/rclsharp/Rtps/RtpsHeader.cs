@@ -15,7 +15,8 @@ public static class RtpsHeader
     public const int Size = 20;
 
     /// <summary>"RTPS" マジック (4 バイト固定)。</summary>
-    public static ReadOnlySpan<byte> Magic => "RTPS"u8;
+    private static readonly byte[] s_Magic = { (byte)'R', (byte)'T', (byte)'P', (byte)'S' };
+    public static ReadOnlySpan<byte> Magic => s_Magic;
 
     /// <summary>ヘッダを書き込む。</summary>
     public static void Write(
