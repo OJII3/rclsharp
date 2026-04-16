@@ -1,10 +1,179 @@
+using System.Buffers.Binary;
+using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
+
 namespace Rclsharp.Cdr;
 
 /// <summary>
-/// OMG CDR (Common Data Representation) リーダ。ReadOnlySpan&lt;byte&gt; から直接読み出す。
-/// 本実装は Phase 1 で行う。Phase 0 では <see cref="ICdrSerializer{T}"/> の API を確定させるための前方宣言。
+/// OMG CDR (Common Data Representation) リーダ。<see cref="ReadOnlySpan{T}"/> から直接読み出す。
+/// alignment はストリーム先頭ではなく <c>cdrOrigin</c> からのオフセットで計算する。
 /// </summary>
 public ref struct CdrReader
 {
-    // Phase 1 で実装: ReadOnlySpan<byte> _buffer, int _position, Endianness, AlignTo, ReadByte/Int32/String/...
+    private readonly ReadOnlySpan<byte> _buffer;
+    private readonly int _cdrOrigin;
+    private int _position;
+
+    public CdrEndianness Endianness { get; }
+
+    public CdrReader(ReadOnlySpan<byte> buffer, CdrEndianness endianness, int cdrOrigin = 0)
+    {
+        _buffer = buffer;
+        _cdrOrigin = cdrOrigin;
+        _position = cdrOrigin;
+        Endianness = endianness;
+    }
+
+    public int Position => _position;
+    public int BytesRead => _position - _cdrOrigin;
+    public int Remaining => _buffer.Length - _position;
+    public int StreamOffset => _position - _cdrOrigin;
+
+    [UnscopedRef]
+    public ReadOnlySpan<byte> RawBuffer => _buffer;
+
+    /// <summary>境界調整。スキップしたバイトの中身は検証しない。</summary>
+    public void AlignTo(int alignment)
+    {
+        if (alignment <= 0 || (alignment & (alignment - 1)) != 0)
+        {
+            throw new ArgumentException("Alignment must be a positive power of two.", nameof(alignment));
+        }
+        int offset = StreamOffset;
+        int padding = (alignment - (offset & (alignment - 1))) & (alignment - 1);
+        EnsureAvailable(padding);
+        _position += padding;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void EnsureAvailable(int byteCount)
+    {
+        if (_position + byteCount > _buffer.Length)
+        {
+            throw new InvalidOperationException(
+                $"CdrReader buffer underflow: needed {byteCount} bytes at position {_position} but only {_buffer.Length - _position} bytes remain.");
+        }
+    }
+
+    public byte ReadByte()
+    {
+        EnsureAvailable(1);
+        return _buffer[_position++];
+    }
+
+    public sbyte ReadSByte() => unchecked((sbyte)ReadByte());
+
+    public bool ReadBool() => ReadByte() != 0;
+
+    public short ReadInt16()
+    {
+        AlignTo(2);
+        EnsureAvailable(2);
+        short value = Endianness == CdrEndianness.LittleEndian
+            ? BinaryPrimitives.ReadInt16LittleEndian(_buffer.Slice(_position))
+            : BinaryPrimitives.ReadInt16BigEndian(_buffer.Slice(_position));
+        _position += 2;
+        return value;
+    }
+
+    public ushort ReadUInt16()
+    {
+        AlignTo(2);
+        EnsureAvailable(2);
+        ushort value = Endianness == CdrEndianness.LittleEndian
+            ? BinaryPrimitives.ReadUInt16LittleEndian(_buffer.Slice(_position))
+            : BinaryPrimitives.ReadUInt16BigEndian(_buffer.Slice(_position));
+        _position += 2;
+        return value;
+    }
+
+    public int ReadInt32()
+    {
+        AlignTo(4);
+        EnsureAvailable(4);
+        int value = Endianness == CdrEndianness.LittleEndian
+            ? BinaryPrimitives.ReadInt32LittleEndian(_buffer.Slice(_position))
+            : BinaryPrimitives.ReadInt32BigEndian(_buffer.Slice(_position));
+        _position += 4;
+        return value;
+    }
+
+    public uint ReadUInt32()
+    {
+        AlignTo(4);
+        EnsureAvailable(4);
+        uint value = Endianness == CdrEndianness.LittleEndian
+            ? BinaryPrimitives.ReadUInt32LittleEndian(_buffer.Slice(_position))
+            : BinaryPrimitives.ReadUInt32BigEndian(_buffer.Slice(_position));
+        _position += 4;
+        return value;
+    }
+
+    public long ReadInt64()
+    {
+        AlignTo(8);
+        EnsureAvailable(8);
+        long value = Endianness == CdrEndianness.LittleEndian
+            ? BinaryPrimitives.ReadInt64LittleEndian(_buffer.Slice(_position))
+            : BinaryPrimitives.ReadInt64BigEndian(_buffer.Slice(_position));
+        _position += 8;
+        return value;
+    }
+
+    public ulong ReadUInt64()
+    {
+        AlignTo(8);
+        EnsureAvailable(8);
+        ulong value = Endianness == CdrEndianness.LittleEndian
+            ? BinaryPrimitives.ReadUInt64LittleEndian(_buffer.Slice(_position))
+            : BinaryPrimitives.ReadUInt64BigEndian(_buffer.Slice(_position));
+        _position += 8;
+        return value;
+    }
+
+    public float ReadFloat()
+    {
+        AlignTo(4);
+        EnsureAvailable(4);
+        float value = Endianness == CdrEndianness.LittleEndian
+            ? BinaryPrimitives.ReadSingleLittleEndian(_buffer.Slice(_position))
+            : BinaryPrimitives.ReadSingleBigEndian(_buffer.Slice(_position));
+        _position += 4;
+        return value;
+    }
+
+    public double ReadDouble()
+    {
+        AlignTo(8);
+        EnsureAvailable(8);
+        double value = Endianness == CdrEndianness.LittleEndian
+            ? BinaryPrimitives.ReadDoubleLittleEndian(_buffer.Slice(_position))
+            : BinaryPrimitives.ReadDoubleBigEndian(_buffer.Slice(_position));
+        _position += 8;
+        return value;
+    }
+
+    /// <summary>整列なし・指定バイト数を生で読み出す。返却 Span は内部バッファのスライス (寿命は呼び出し中)。</summary>
+    public ReadOnlySpan<byte> ReadRawBytes(int count)
+    {
+        if (count < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(count));
+        }
+        EnsureAvailable(count);
+        var slice = _buffer.Slice(_position, count);
+        _position += count;
+        return slice;
+    }
+
+    /// <summary>指定バイト数を読み飛ばす (内容は検証しない)。</summary>
+    public void Skip(int count)
+    {
+        if (count < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(count));
+        }
+        EnsureAvailable(count);
+        _position += count;
+    }
 }
