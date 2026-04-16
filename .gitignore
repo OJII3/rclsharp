@@ -49,3 +49,8 @@ Desktop.ini
 
 .claude/*.local.json
 .claude/worktree*
+
+## Nix
+.direnv/
+result
+result-*
