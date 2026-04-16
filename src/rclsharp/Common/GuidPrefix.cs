@@ -1,11 +1,15 @@
+using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 
 namespace Rclsharp.Common;
 
 /// <summary>
 /// RTPS GuidPrefix (12 バイト固定)。RTPS 仕様 8.2.4.3。
-/// 通常は先頭 2 バイトに VendorId、残りに hostId / processId / counter が入る。
-/// 詳細レイアウトはベンダ依存。rclsharp の生成方針は Phase 4 で確定する。
+/// rclsharp のレイアウト:
+/// - bytes 0-1: VendorId
+/// - bytes 2-5: hostId (BE uint32)
+/// - bytes 6-9: processId (BE uint32)
+/// - bytes 10-11: instanceCounter (BE uint16)
 /// </summary>
 public struct GuidPrefix : IEquatable<GuidPrefix>
 {
@@ -26,6 +30,34 @@ public struct GuidPrefix : IEquatable<GuidPrefix>
 
     /// <summary>すべて 0 の Unknown GuidPrefix。</summary>
     public static GuidPrefix Unknown => default;
+
+    /// <summary>明示的に各フィールドを指定して GuidPrefix を生成する。</summary>
+    public static GuidPrefix Create(VendorId vendorId, uint hostId, uint processId, ushort instanceCounter)
+    {
+        Span<byte> bytes = stackalloc byte[Size];
+        bytes[0] = vendorId.V0;
+        bytes[1] = vendorId.V1;
+        BinaryPrimitives.WriteUInt32BigEndian(bytes[2..6], hostId);
+        BinaryPrimitives.WriteUInt32BigEndian(bytes[6..10], processId);
+        BinaryPrimitives.WriteUInt16BigEndian(bytes[10..12], instanceCounter);
+        return new GuidPrefix(bytes);
+    }
+
+    private static int s_instanceCounter;
+    private static readonly uint s_processSeed = unchecked((uint)Random.Shared.Next());
+
+    /// <summary>
+    /// 現在のプロセス固有の GuidPrefix を生成する。
+    /// hostId は <see cref="Environment.MachineName"/> のハッシュ、processId は実 PID と
+    /// プロセス起動時の乱数シードを XOR したもの、instanceCounter はプロセス内連番。
+    /// </summary>
+    public static GuidPrefix CreateForCurrentProcess(VendorId vendorId)
+    {
+        uint hostId = unchecked((uint)Environment.MachineName.GetHashCode());
+        uint pid = unchecked((uint)Environment.ProcessId ^ s_processSeed);
+        ushort counter = unchecked((ushort)Interlocked.Increment(ref s_instanceCounter));
+        return Create(vendorId, hostId, pid, counter);
+    }
 
     public byte this[int index] => _storage[index];
 

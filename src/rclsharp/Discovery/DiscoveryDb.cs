@@ -1,0 +1,127 @@
+using Rclsharp.Common;
+
+namespace Rclsharp.Discovery;
+
+/// <summary>
+/// 検出した remote Participant を Guid 単位で保持するスレッドセーフな DB。
+/// SPDP 受信側から <see cref="UpsertParticipant"/> で更新、定期 sweeper から <see cref="ExpireOldParticipants"/>。
+/// </summary>
+public sealed class DiscoveryDb
+{
+    private readonly object _lock = new();
+    private readonly Dictionary<GuidPrefix, RemoteParticipant> _participants = new();
+
+    /// <summary>新規参加者検出時に発火 (lock 外で呼ばれる)。</summary>
+    public event Action<RemoteParticipant>? ParticipantDiscovered;
+
+    /// <summary>既存参加者の更新時に発火 (lock 外で呼ばれる)。</summary>
+    public event Action<RemoteParticipant>? ParticipantUpdated;
+
+    /// <summary>Lease 期限切れで削除されたときに発火 (lock 外で呼ばれる)。</summary>
+    public event Action<RemoteParticipant>? ParticipantLost;
+
+    /// <summary>現在登録されている Participant 数。</summary>
+    public int Count
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _participants.Count;
+            }
+        }
+    }
+
+    /// <summary>登録されている Participant のスナップショット。</summary>
+    public IReadOnlyList<RemoteParticipant> Snapshot()
+    {
+        lock (_lock)
+        {
+            return _participants.Values.ToArray();
+        }
+    }
+
+    /// <summary>
+    /// SPDP 受信時に呼ぶ。新規なら追加して <see cref="ParticipantDiscovered"/>、
+    /// 既存なら状態を更新して <see cref="ParticipantUpdated"/> を発火する。
+    /// 自分自身 (Guid Prefix が <paramref name="ignorePrefix"/> と一致) は無視する。
+    /// </summary>
+    public void UpsertParticipant(ParticipantData data, DateTime nowUtc, GuidPrefix? ignorePrefix = null)
+    {
+        if (ignorePrefix.HasValue && data.Guid.Prefix.Equals(ignorePrefix.Value))
+        {
+            return;
+        }
+
+        RemoteParticipant participant;
+        bool isNew;
+        lock (_lock)
+        {
+            if (_participants.TryGetValue(data.Guid.Prefix, out var existing))
+            {
+                existing.Update(data, nowUtc);
+                participant = existing;
+                isNew = false;
+            }
+            else
+            {
+                participant = new RemoteParticipant(data, nowUtc);
+                _participants[data.Guid.Prefix] = participant;
+                isNew = true;
+            }
+        }
+
+        if (isNew)
+        {
+            ParticipantDiscovered?.Invoke(participant);
+        }
+        else
+        {
+            ParticipantUpdated?.Invoke(participant);
+        }
+    }
+
+    /// <summary>Lease 期限切れの Participant を削除し、それぞれ Lost イベントを発火する。</summary>
+    public void ExpireOldParticipants(DateTime nowUtc)
+    {
+        List<RemoteParticipant>? expired = null;
+        lock (_lock)
+        {
+            foreach (var (key, p) in _participants.ToArray())
+            {
+                if (p.IsExpired(nowUtc))
+                {
+                    expired ??= new List<RemoteParticipant>();
+                    expired.Add(p);
+                    _participants.Remove(key);
+                }
+            }
+        }
+        if (expired is null)
+        {
+            return;
+        }
+        foreach (var p in expired)
+        {
+            ParticipantLost?.Invoke(p);
+        }
+    }
+
+    /// <summary>明示的に Participant を削除する (テスト/シャットダウン用)。</summary>
+    public bool TryRemove(GuidPrefix prefix)
+    {
+        RemoteParticipant? removed;
+        lock (_lock)
+        {
+            if (!_participants.Remove(prefix, out removed))
+            {
+                return false;
+            }
+        }
+        if (removed is not null)
+        {
+            ParticipantLost?.Invoke(removed);
+        }
+        return true;
+    }
+}
