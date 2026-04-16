@@ -1,115 +1,113 @@
 using Rclsharp.Cdr;
 using Rclsharp.Common;
 using Rclsharp.Common.Logging;
-using Rclsharp.Rtps;
-using Rclsharp.Rtps.Submessages;
+using Rclsharp.Rtps.Reader;
 using Rclsharp.Transport;
+
+using Guid = Rclsharp.Common.Guid;
 
 namespace Rclsharp.Discovery;
 
 /// <summary>
 /// SEDP の Publications または Subscriptions Reader。
-/// transport の Received を購読し、SEDP_BUILTIN_*_WRITER から送信された DATA を解釈して
-/// <see cref="DiscoveryDb.UpsertEndpoint"/> へ流す。
+/// Phase 8 で Reliable Stateful Reader ベースに変更。
+/// PayloadReceived → encap PL_CDR を解釈 → DiscoveryDb.UpsertEndpoint。
 /// </summary>
 public sealed class SedpEndpointReader : IDisposable
 {
-    private readonly IRtpsTransport _transport;
+    private readonly StatefulReader _stateful;
     private readonly DiscoveryDb _discoveryDb;
     private readonly GuidPrefix _localPrefix;
-    private readonly EntityId _expectedWriterEntityId;
     private readonly EndpointKind _producedEndpointKind;
     private readonly ILogger _logger;
     private readonly Func<DateTime> _clock;
-
-    private bool _started;
     private bool _disposed;
 
-    /// <summary>SEDP DATA を受信して解析できたとき発火 (DiscoveryDb 更新前)。</summary>
+    public StatefulReader Stateful => _stateful;
+    public Guid Guid => _stateful.Guid;
+    public EntityId ReaderEntityId => _stateful.ReaderEntityId;
+
+    /// <summary>parse 成功時に発火 (DiscoveryDb 更新前)。</summary>
     public event Action<DiscoveredEndpointData>? EndpointDataReceived;
 
     public SedpEndpointReader(
-        IRtpsTransport transport,
+        IRtpsTransport replyTransport,
         DiscoveryDb discoveryDb,
+        ProtocolVersion version,
+        VendorId vendorId,
         GuidPrefix localPrefix,
-        EntityId expectedWriterEntityId,
+        EntityId readerEntityId,
+        Locator ackNackFallbackDestination,
         EndpointKind producedEndpointKind,
         ILogger? logger = null,
         Func<DateTime>? clock = null)
     {
-        _transport = transport;
         _discoveryDb = discoveryDb;
         _localPrefix = localPrefix;
-        _expectedWriterEntityId = expectedWriterEntityId;
         _producedEndpointKind = producedEndpointKind;
         _logger = logger ?? NullLogger.Instance;
         _clock = clock ?? (() => DateTime.UtcNow);
+
+        _stateful = new StatefulReader(
+            replyTransport: replyTransport,
+            version: version,
+            vendorId: vendorId,
+            localPrefix: localPrefix,
+            readerEntityId: readerEntityId,
+            ackNackFallbackDestination: ackNackFallbackDestination,
+            logger: _logger);
+
+        _stateful.PayloadReceived += OnPayloadReceived;
     }
 
-    public void Start()
+    /// <summary>remote SEDP Writer を match (この reader が DATA を受け付けるようにする)。</summary>
+    public void MatchRemoteWriter(Guid remoteSedpWriterGuid, Locator? unicastReplyLocator = null)
     {
         ThrowIfDisposed();
-        if (_started) return;
-        _transport.Received += OnPacketReceived;
-        _started = true;
+        _stateful.MatchWriter(remoteSedpWriterGuid, unicastReplyLocator);
     }
 
-    public void Stop()
-    {
-        if (!_started) return;
-        _transport.Received -= OnPacketReceived;
-        _started = false;
-    }
+    public void UnmatchRemoteWriter(Guid remoteSedpWriterGuid) => _stateful.UnmatchWriter(remoteSedpWriterGuid);
+
+    /// <summary>RTPS パケット受信ハンドラ。transport.Received を購読してこれを呼ぶ。</summary>
+    public void OnPacketReceived(ReadOnlyMemory<byte> packet, Locator source)
+        => _stateful.OnPacketReceived(packet, source);
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        Stop();
+        _stateful.PayloadReceived -= OnPayloadReceived;
+        _stateful.Dispose();
     }
 
-    private void OnPacketReceived(ReadOnlyMemory<byte> packet, Locator source)
+    private void OnPayloadReceived(Rclsharp.Rtps.HistoryCache.CacheChange change)
     {
-        try { ProcessPacket(packet.Span); }
-        catch (Exception ex) { _logger.Warn($"SedpEndpointReader failed to parse packet from {source}", ex); }
-    }
+        try
+        {
+            var payload = change.SerializedPayload.Span;
+            if (payload.Length < CdrEncapsulation.Size)
+            {
+                _logger.Debug("SedpEndpointReader: payload too small for encap header");
+                return;
+            }
+            var (kind, _) = CdrEncapsulation.Read(payload[..CdrEncapsulation.Size]);
+            if (!CdrEncapsulation.IsParameterList(kind))
+            {
+                _logger.Debug($"SedpEndpointReader: unexpected encapsulation 0x{kind:X4}");
+                return;
+            }
+            var endian = CdrEncapsulation.GetEndianness(kind);
+            var cdrReader = new CdrReader(payload, endian, cdrOrigin: CdrEncapsulation.Size);
+            var endpointData = DiscoveredEndpointDataSerializer.Read(ref cdrReader, _producedEndpointKind);
 
-    public void ProcessPacket(ReadOnlySpan<byte> packet)
-    {
-        if (!RtpsHeader.TryRead(packet, out _, out _, out _))
-        {
-            return;
+            EndpointDataReceived?.Invoke(endpointData);
+            _discoveryDb.UpsertEndpoint(endpointData, _clock(), ignorePrefix: _localPrefix);
         }
-        var reader = new RtpsMessageReader(packet);
-        while (reader.TryReadNext(out var hdr, out var body))
+        catch (Exception ex)
         {
-            if (hdr.Kind != SubmessageKind.Data) continue;
-            var data = DataSubmessage.ReadBody(body, hdr.Endianness, hdr.Flags);
-            if (!data.WriterEntityId.Equals(_expectedWriterEntityId)) continue;
-            if (data.SerializedPayload.IsEmpty) continue;
-            HandleSedpData(data.SerializedPayload.Span);
+            _logger.Warn("SedpEndpointReader failed to parse endpoint data", ex);
         }
-    }
-
-    private void HandleSedpData(ReadOnlySpan<byte> serializedPayload)
-    {
-        if (serializedPayload.Length < CdrEncapsulation.Size)
-        {
-            _logger.Debug("SedpEndpointReader: payload too small for encap header");
-            return;
-        }
-        var (kind, _) = CdrEncapsulation.Read(serializedPayload[..CdrEncapsulation.Size]);
-        if (!CdrEncapsulation.IsParameterList(kind))
-        {
-            _logger.Debug($"SedpEndpointReader: unexpected encapsulation 0x{kind:X4}");
-            return;
-        }
-        var endian = CdrEncapsulation.GetEndianness(kind);
-        var cdrReader = new CdrReader(serializedPayload, endian, cdrOrigin: CdrEncapsulation.Size);
-        var endpointData = DiscoveredEndpointDataSerializer.Read(ref cdrReader, _producedEndpointKind);
-
-        EndpointDataReceived?.Invoke(endpointData);
-        _discoveryDb.UpsertEndpoint(endpointData, _clock(), ignorePrefix: _localPrefix);
     }
 
     private void ThrowIfDisposed()

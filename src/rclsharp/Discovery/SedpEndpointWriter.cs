@@ -2,167 +2,113 @@ using System.Buffers;
 using Rclsharp.Cdr;
 using Rclsharp.Common;
 using Rclsharp.Common.Logging;
-using Rclsharp.Rtps;
-using Rclsharp.Rtps.Submessages;
+using Rclsharp.Rtps.HistoryCache;
+using Rclsharp.Rtps.Writer;
 using Rclsharp.Transport;
+
+using Guid = Rclsharp.Common.Guid;
 
 namespace Rclsharp.Discovery;
 
 /// <summary>
 /// SEDP の Publications または Subscriptions Writer。
-/// 周期的にローカル endpoint 一覧を <see cref="DiscoveredEndpointData"/> として PL_CDR シリアライズし、
-/// SEDP_BUILTIN_*_WRITER の EntityId を持つ DATA submessage で送信する。
-///
-/// <para>
-/// Phase 6 では Best-Effort (StatelessWriter 相当)。Reliable 化は Phase 7 で。
-/// </para>
+/// Phase 8 で Reliable Stateful Writer ベースに変更:
+/// 各 endpoint = 1 サンプルとして history に追加し、新規 reader が match されたら NACK で再送される
+/// (TRANSIENT_LOCAL に近い挙動)。
 /// </summary>
 public sealed class SedpEndpointWriter : IDisposable
 {
-    public const int SendBufferSize = 1500;
-
-    private readonly IRtpsTransport _transport;
-    private readonly Locator _destination;
-    private readonly ProtocolVersion _version;
-    private readonly VendorId _vendorId;
-    private readonly GuidPrefix _localPrefix;
-    private readonly EntityId _writerEntityId;
-    private readonly Func<IReadOnlyList<DiscoveredEndpointData>> _endpointsProvider;
-    private readonly TimeSpan _interval;
+    private readonly StatefulWriter _stateful;
     private readonly ILogger _logger;
-
-    private long _sequenceNumber;
-    private CancellationTokenSource? _cts;
-    private Task? _loopTask;
     private bool _disposed;
+
+    /// <summary>内部の StatefulWriter (matching 等の操作用)。</summary>
+    public StatefulWriter Stateful => _stateful;
+
+    public Guid Guid => _stateful.Guid;
+    public EntityId WriterEntityId => _stateful.WriterEntityId;
 
     public SedpEndpointWriter(
         IRtpsTransport transport,
-        Locator destination,
+        Locator multicastDestination,
         ProtocolVersion version,
         VendorId vendorId,
         GuidPrefix localPrefix,
         EntityId writerEntityId,
-        Func<IReadOnlyList<DiscoveredEndpointData>> endpointsProvider,
-        TimeSpan interval,
+        TimeSpan heartbeatPeriod,
         ILogger? logger = null)
     {
-        _transport = transport;
-        _destination = destination;
-        _version = version;
-        _vendorId = vendorId;
-        _localPrefix = localPrefix;
-        _writerEntityId = writerEntityId;
-        _endpointsProvider = endpointsProvider;
-        _interval = interval;
         _logger = logger ?? NullLogger.Instance;
+        var guid = new Guid(localPrefix, writerEntityId);
+        var history = new WriterHistoryCache(guid);
+        _stateful = new StatefulWriter(
+            sendTransport: transport,
+            multicastDestination: multicastDestination,
+            version: version,
+            vendorId: vendorId,
+            localPrefix: localPrefix,
+            writerEntityId: writerEntityId,
+            heartbeatPeriod: heartbeatPeriod,
+            history: history,
+            logger: _logger);
     }
 
-    public void Start()
+    public void Start() => _stateful.Start();
+    public void Stop() => _stateful.Stop();
+
+    /// <summary>remote SEDP Reader を match (この writer から DATA/HB が届くようにする)。</summary>
+    public void MatchRemoteReader(Guid remoteSedpReaderGuid, Locator? unicastLocator = null)
     {
         ThrowIfDisposed();
-        if (_loopTask is not null)
-        {
-            return;
-        }
-        _cts = new CancellationTokenSource();
-        var token = _cts.Token;
-        _loopTask = Task.Run(() => SendLoopAsync(token), token);
+        _stateful.MatchReader(remoteSedpReaderGuid, unicastLocator);
     }
 
-    public void Stop()
-    {
-        if (_cts is null)
-        {
-            return;
-        }
-        _cts.Cancel();
-        try { _loopTask?.Wait(TimeSpan.FromSeconds(1)); }
-        catch (AggregateException ex) when (ex.InnerExceptions.All(e => e is OperationCanceledException)) { }
-        catch (Exception ex) { _logger.Warn("SedpEndpointWriter loop did not exit cleanly", ex); }
-        _cts.Dispose();
-        _cts = null;
-        _loopTask = null;
-    }
+    public void UnmatchRemoteReader(Guid remoteSedpReaderGuid) => _stateful.UnmatchReader(remoteSedpReaderGuid);
 
-    /// <summary>現在のローカル endpoint 一覧を 1 サイクル送信する。</summary>
-    public async Task SendAllAsync(CancellationToken cancellationToken = default)
+    /// <summary>
+    /// 1 endpoint を SEDP に publish する (history に永続化)。
+    /// 既に match されている remote reader にはすぐ DATA が送られる。
+    /// 後から match される reader は HEARTBEAT→ACKNACK で再送を要求できる。
+    /// </summary>
+    public async ValueTask AddEndpointAsync(DiscoveredEndpointData endpoint, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        var endpoints = _endpointsProvider();
-        foreach (var endpoint in endpoints)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            long sn = Interlocked.Increment(ref _sequenceNumber);
-            var packet = BuildPacket(endpoint, sn);
-            try
-            {
-                await _transport.SendAsync(packet, _destination, cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                _logger.Error("SedpEndpointWriter send failed", ex);
-            }
-        }
+        var payload = SerializeEndpoint(endpoint);
+        await _stateful.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task SendLoopAsync(CancellationToken cancellationToken)
-    {
-        await SendAllAsync(cancellationToken).ConfigureAwait(false);
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            try { await Task.Delay(_interval, cancellationToken).ConfigureAwait(false); }
-            catch (OperationCanceledException) { break; }
-            await SendAllAsync(cancellationToken).ConfigureAwait(false);
-        }
-    }
+    /// <summary>WriterHistoryCache 上の累積件数 (テスト/デバッグ用)。</summary>
+    public int PublishedCount => (int)_stateful.History.LastSequenceNumber.Value;
 
-    /// <summary>1 endpoint 分の RTPS message を組み立てる (テスト用に public)。</summary>
-    public ReadOnlyMemory<byte> BuildPacket(DiscoveredEndpointData endpoint, long sequenceNumber)
-    {
-        // SerializedPayload (encap PL_CDR_LE 4B + PL_CDR)
-        var payloadBuf = ArrayPool<byte>.Shared.Rent(1024);
-        int payloadLength;
-        try
-        {
-            CdrEncapsulation.Write(payloadBuf, CdrEncapsulation.PlCdrLittleEndian);
-            var inner = new CdrWriter(payloadBuf, CdrEndianness.LittleEndian, cdrOrigin: CdrEncapsulation.Size);
-            DiscoveredEndpointDataSerializer.Write(ref inner, endpoint);
-            payloadLength = inner.Position;
-        }
-        catch
-        {
-            ArrayPool<byte>.Shared.Return(payloadBuf);
-            throw;
-        }
-
-        var payload = new byte[payloadLength];
-        Buffer.BlockCopy(payloadBuf, 0, payload, 0, payloadLength);
-        ArrayPool<byte>.Shared.Return(payloadBuf);
-
-        // RTPS message (header + INFO_TS + DATA)
-        var messageBuf = new byte[SendBufferSize];
-        var writer = new RtpsMessageWriter(messageBuf, _version, _vendorId, _localPrefix);
-        writer.WriteInfoTimestamp(new InfoTimestampSubmessage(Time.Now()));
-        var dataSubmsg = new DataSubmessage(
-            readerEntityId: EntityId.Unknown,
-            writerEntityId: _writerEntityId,
-            writerSn: new SequenceNumber(sequenceNumber),
-            serializedPayload: payload,
-            dataPresent: true);
-        writer.WriteData(dataSubmsg);
-
-        var result = new byte[writer.BytesWritten];
-        writer.WrittenSpan.CopyTo(result);
-        return result;
-    }
+    /// <summary>ACKNACK 受信ハンドラ。transport.Received を購読してこれを呼ぶ。</summary>
+    public void OnPacketReceived(ReadOnlyMemory<byte> packet, Locator source)
+        => _stateful.OnPacketReceived(packet, source);
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        Stop();
+        _stateful.Dispose();
+    }
+
+    /// <summary>encap PL_CDR_LE 4B + DiscoveredEndpointData を 1 つの byte[] にする。</summary>
+    private static byte[] SerializeEndpoint(DiscoveredEndpointData endpoint)
+    {
+        var buf = ArrayPool<byte>.Shared.Rent(1024);
+        try
+        {
+            CdrEncapsulation.Write(buf, CdrEncapsulation.PlCdrLittleEndian);
+            var inner = new CdrWriter(buf, CdrEndianness.LittleEndian, cdrOrigin: CdrEncapsulation.Size);
+            DiscoveredEndpointDataSerializer.Write(ref inner, endpoint);
+            int length = inner.Position;
+            var copy = new byte[length];
+            Buffer.BlockCopy(buf, 0, copy, 0, length);
+            return copy;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buf);
+        }
     }
 
     private void ThrowIfDisposed()

@@ -1,6 +1,7 @@
 using System.Net;
 using Rclsharp.Cdr;
 using Rclsharp.Common;
+using Rclsharp.Common.Logging;
 using Rclsharp.Dds.QoS;
 using Rclsharp.Discovery;
 using Rclsharp.Rcl.Naming;
@@ -138,54 +139,78 @@ public sealed class DomainParticipant : IDisposable
             interval: _options.SpdpInterval,
             logger: _options.Logger);
 
-        // SEDP は metatraffic multicast (= SPDP transport) を共有する (Best-Effort, Phase 6)。
+        // SEDP (Phase 8 で Reliable 化)。
+        // - Writer: multicast transport で送信、unicast transport で ACKNACK を受信
+        // - Reader: multicast / unicast 両方で DATA/HB を受信、unicast で ACKNACK を返信
         _sedpPublicationsWriter = new SedpEndpointWriter(
             transport: _multicastTransport,
-            destination: _multicastDestination,
+            multicastDestination: _multicastDestination,
             version: _options.ProtocolVersion,
             vendorId: _options.VendorId,
             localPrefix: GuidPrefix,
             writerEntityId: BuiltinEntityIds.SedpBuiltinPublicationsWriter,
-            endpointsProvider: SnapshotLocalWriters,
-            interval: _options.SedpInterval,
+            heartbeatPeriod: _options.SedpInterval,
             logger: _options.Logger);
 
         _sedpPublicationsReader = new SedpEndpointReader(
-            transport: _multicastTransport,
+            replyTransport: _unicastTransport,
             discoveryDb: _discoveryDb,
+            version: _options.ProtocolVersion,
+            vendorId: _options.VendorId,
             localPrefix: GuidPrefix,
-            expectedWriterEntityId: BuiltinEntityIds.SedpBuiltinPublicationsWriter,
+            readerEntityId: BuiltinEntityIds.SedpBuiltinPublicationsReader,
+            ackNackFallbackDestination: _multicastDestination,
             producedEndpointKind: EndpointKind.Writer,
             logger: _options.Logger);
 
         _sedpSubscriptionsWriter = new SedpEndpointWriter(
             transport: _multicastTransport,
-            destination: _multicastDestination,
+            multicastDestination: _multicastDestination,
             version: _options.ProtocolVersion,
             vendorId: _options.VendorId,
             localPrefix: GuidPrefix,
             writerEntityId: BuiltinEntityIds.SedpBuiltinSubscriptionsWriter,
-            endpointsProvider: SnapshotLocalReaders,
-            interval: _options.SedpInterval,
+            heartbeatPeriod: _options.SedpInterval,
             logger: _options.Logger);
 
         _sedpSubscriptionsReader = new SedpEndpointReader(
-            transport: _multicastTransport,
+            replyTransport: _unicastTransport,
             discoveryDb: _discoveryDb,
+            version: _options.ProtocolVersion,
+            vendorId: _options.VendorId,
             localPrefix: GuidPrefix,
-            expectedWriterEntityId: BuiltinEntityIds.SedpBuiltinSubscriptionsWriter,
+            readerEntityId: BuiltinEntityIds.SedpBuiltinSubscriptionsReader,
+            ackNackFallbackDestination: _multicastDestination,
             producedEndpointKind: EndpointKind.Reader,
             logger: _options.Logger);
+
+        // SPDP で remote participant を発見したら SEDP endpoint を auto-match
+        _discoveryDb.ParticipantDiscovered += OnRemoteParticipantDiscovered;
     }
 
-    private IReadOnlyList<DiscoveredEndpointData> SnapshotLocalWriters()
+    private void OnRemoteParticipantDiscovered(RemoteParticipant participant)
     {
-        lock (_localEndpointsLock) { return _localWriters.ToArray(); }
-    }
+        // remote SEDP endpoint の Guid を計算 (固定 EntityId)
+        var prefix = participant.GuidPrefix;
+        var remoteSedpPubReader = new Guid(prefix, BuiltinEntityIds.SedpBuiltinPublicationsReader);
+        var remoteSedpPubWriter = new Guid(prefix, BuiltinEntityIds.SedpBuiltinPublicationsWriter);
+        var remoteSedpSubReader = new Guid(prefix, BuiltinEntityIds.SedpBuiltinSubscriptionsReader);
+        var remoteSedpSubWriter = new Guid(prefix, BuiltinEntityIds.SedpBuiltinSubscriptionsWriter);
 
-    private IReadOnlyList<DiscoveredEndpointData> SnapshotLocalReaders()
-    {
-        lock (_localEndpointsLock) { return _localReaders.ToArray(); }
+        // remote の metatraffic unicast (ACKNACK 返送先 / DATA 送信先)
+        Locator? remoteUnicast = participant.Data.MetatrafficUnicastLocators.Count > 0
+            ? participant.Data.MetatrafficUnicastLocators[0]
+            : null;
+
+        // 自 writer ↔ remote reader
+        _sedpPublicationsWriter.MatchRemoteReader(remoteSedpPubReader, remoteUnicast);
+        _sedpSubscriptionsWriter.MatchRemoteReader(remoteSedpSubReader, remoteUnicast);
+
+        // 自 reader ↔ remote writer (ACKNACK 返送先として remoteUnicast)
+        _sedpPublicationsReader.MatchRemoteWriter(remoteSedpPubWriter, remoteUnicast);
+        _sedpSubscriptionsReader.MatchRemoteWriter(remoteSedpSubWriter, remoteUnicast);
+
+        _options.Logger.Debug($"DomainParticipant: auto-matched SEDP endpoints for {participant.Guid}");
     }
 
     /// <summary>送受信トランスポートと SPDP の起動。</summary>
@@ -201,8 +226,16 @@ public sealed class DomainParticipant : IDisposable
         _userMulticastTransport.Start();
         _spdpReader.Start();
         _spdpWriter.Start();
-        _sedpPublicationsReader.Start();
-        _sedpSubscriptionsReader.Start();
+
+        // SEDP の DATA/HB は multicast (初期) と unicast (ACKNACK 返信先) の両方で受信する
+        _multicastTransport.Received += _sedpPublicationsReader.OnPacketReceived;
+        _multicastTransport.Received += _sedpSubscriptionsReader.OnPacketReceived;
+        _unicastTransport.Received += _sedpPublicationsReader.OnPacketReceived;
+        _unicastTransport.Received += _sedpSubscriptionsReader.OnPacketReceived;
+        // SEDP writer は ACKNACK を unicast metatraffic で受ける
+        _unicastTransport.Received += _sedpPublicationsWriter.OnPacketReceived;
+        _unicastTransport.Received += _sedpSubscriptionsWriter.OnPacketReceived;
+
         _sedpPublicationsWriter.Start();
         _sedpSubscriptionsWriter.Start();
         _started = true;
@@ -217,8 +250,12 @@ public sealed class DomainParticipant : IDisposable
         }
         _sedpPublicationsWriter.Stop();
         _sedpSubscriptionsWriter.Stop();
-        _sedpPublicationsReader.Stop();
-        _sedpSubscriptionsReader.Stop();
+        _multicastTransport.Received -= _sedpPublicationsReader.OnPacketReceived;
+        _multicastTransport.Received -= _sedpSubscriptionsReader.OnPacketReceived;
+        _unicastTransport.Received -= _sedpPublicationsReader.OnPacketReceived;
+        _unicastTransport.Received -= _sedpSubscriptionsReader.OnPacketReceived;
+        _unicastTransport.Received -= _sedpPublicationsWriter.OnPacketReceived;
+        _unicastTransport.Received -= _sedpSubscriptionsWriter.OnPacketReceived;
         _spdpWriter.Stop();
         _spdpReader.Stop();
         _userMulticastTransport.Stop();
@@ -267,7 +304,7 @@ public sealed class DomainParticipant : IDisposable
             writerEntityId,
             _options.Logger);
 
-        // SEDP 用に登録
+        // SEDP 用に登録 (即時 publish)
         var endpointGuid = new Guid(GuidPrefix, writerEntityId);
         var endpointData = new DiscoveredEndpointData
         {
@@ -280,6 +317,7 @@ public sealed class DomainParticipant : IDisposable
             Durability = DurabilityQos.Volatile,
         };
         lock (_localEndpointsLock) { _localWriters.Add(endpointData); }
+        _ = _sedpPublicationsWriter.AddEndpointAsync(endpointData);
 
         return new Publisher<T>(topicName, writer, serializer);
     }
@@ -305,7 +343,7 @@ public sealed class DomainParticipant : IDisposable
         var readerEntityId = UserEntityIdAllocator.ReaderFor(ddsTopic);
         var reader = new StatelessReader(_userMulticastTransport, writerEntityId, _options.Logger);
 
-        // SEDP 用に登録 (この participant の reader endpoint を広告)
+        // SEDP 用に登録 (即時 publish)
         var endpointGuid = new Guid(GuidPrefix, readerEntityId);
         var endpointData = new DiscoveredEndpointData
         {
@@ -318,6 +356,7 @@ public sealed class DomainParticipant : IDisposable
             Durability = DurabilityQos.Volatile,
         };
         lock (_localEndpointsLock) { _localReaders.Add(endpointData); }
+        _ = _sedpSubscriptionsWriter.AddEndpointAsync(endpointData);
 
         return new Subscription<T>(topicName, reader, serializer, handler);
     }
