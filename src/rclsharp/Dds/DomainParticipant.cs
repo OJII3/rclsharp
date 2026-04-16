@@ -1,6 +1,7 @@
 using System.Net;
 using Rclsharp.Cdr;
 using Rclsharp.Common;
+using Rclsharp.Dds.QoS;
 using Rclsharp.Discovery;
 using Rclsharp.Rcl.Naming;
 using Rclsharp.Rtps.Reader;
@@ -12,8 +13,8 @@ using Guid = Rclsharp.Common.Guid;
 namespace Rclsharp.Dds;
 
 /// <summary>
-/// rclsharp の Domain Participant。SPDP の起動・停止と Discovery 状態の管理を行う。
-/// Phase 4 ではメタトラフィック (SPDP) のみ。SEDP / ユーザートピックは後続フェーズ。
+/// rclsharp の Domain Participant。SPDP / SEDP / ユーザートピック transport を一元管理する。
+/// Phase 6 で SEDP (Best-Effort) を追加。Reliable 化は Phase 7。
 /// </summary>
 public sealed class DomainParticipant : IDisposable
 {
@@ -27,11 +28,20 @@ public sealed class DomainParticipant : IDisposable
     private readonly DiscoveryDb _discoveryDb;
     private readonly SpdpBuiltinParticipantReader _spdpReader;
     private readonly SpdpBuiltinParticipantWriter _spdpWriter;
+    private readonly SedpEndpointWriter _sedpPublicationsWriter;
+    private readonly SedpEndpointReader _sedpPublicationsReader;
+    private readonly SedpEndpointWriter _sedpSubscriptionsWriter;
+    private readonly SedpEndpointReader _sedpSubscriptionsReader;
     private readonly Locator _multicastDestination;
     private readonly Locator _userMulticastDestination;
     private readonly Locator _metatrafficUnicastLocator;
     private readonly Locator _metatrafficMulticastLocator;
     private readonly Locator _defaultMulticastLocator;
+
+    // ローカル endpoint 一覧 (SEDP 送信時に使用)
+    private readonly object _localEndpointsLock = new();
+    private readonly List<DiscoveredEndpointData> _localWriters = new();
+    private readonly List<DiscoveredEndpointData> _localReaders = new();
 
     private bool _started;
     private bool _disposed;
@@ -127,6 +137,55 @@ public sealed class DomainParticipant : IDisposable
             participantDataProvider: BuildParticipantData,
             interval: _options.SpdpInterval,
             logger: _options.Logger);
+
+        // SEDP は metatraffic multicast (= SPDP transport) を共有する (Best-Effort, Phase 6)。
+        _sedpPublicationsWriter = new SedpEndpointWriter(
+            transport: _multicastTransport,
+            destination: _multicastDestination,
+            version: _options.ProtocolVersion,
+            vendorId: _options.VendorId,
+            localPrefix: GuidPrefix,
+            writerEntityId: BuiltinEntityIds.SedpBuiltinPublicationsWriter,
+            endpointsProvider: SnapshotLocalWriters,
+            interval: _options.SedpInterval,
+            logger: _options.Logger);
+
+        _sedpPublicationsReader = new SedpEndpointReader(
+            transport: _multicastTransport,
+            discoveryDb: _discoveryDb,
+            localPrefix: GuidPrefix,
+            expectedWriterEntityId: BuiltinEntityIds.SedpBuiltinPublicationsWriter,
+            producedEndpointKind: EndpointKind.Writer,
+            logger: _options.Logger);
+
+        _sedpSubscriptionsWriter = new SedpEndpointWriter(
+            transport: _multicastTransport,
+            destination: _multicastDestination,
+            version: _options.ProtocolVersion,
+            vendorId: _options.VendorId,
+            localPrefix: GuidPrefix,
+            writerEntityId: BuiltinEntityIds.SedpBuiltinSubscriptionsWriter,
+            endpointsProvider: SnapshotLocalReaders,
+            interval: _options.SedpInterval,
+            logger: _options.Logger);
+
+        _sedpSubscriptionsReader = new SedpEndpointReader(
+            transport: _multicastTransport,
+            discoveryDb: _discoveryDb,
+            localPrefix: GuidPrefix,
+            expectedWriterEntityId: BuiltinEntityIds.SedpBuiltinSubscriptionsWriter,
+            producedEndpointKind: EndpointKind.Reader,
+            logger: _options.Logger);
+    }
+
+    private IReadOnlyList<DiscoveredEndpointData> SnapshotLocalWriters()
+    {
+        lock (_localEndpointsLock) { return _localWriters.ToArray(); }
+    }
+
+    private IReadOnlyList<DiscoveredEndpointData> SnapshotLocalReaders()
+    {
+        lock (_localEndpointsLock) { return _localReaders.ToArray(); }
     }
 
     /// <summary>送受信トランスポートと SPDP の起動。</summary>
@@ -142,16 +201,24 @@ public sealed class DomainParticipant : IDisposable
         _userMulticastTransport.Start();
         _spdpReader.Start();
         _spdpWriter.Start();
+        _sedpPublicationsReader.Start();
+        _sedpSubscriptionsReader.Start();
+        _sedpPublicationsWriter.Start();
+        _sedpSubscriptionsWriter.Start();
         _started = true;
     }
 
-    /// <summary>SPDP / Transport を停止する。</summary>
+    /// <summary>SPDP / SEDP / Transport を停止する。</summary>
     public void Stop()
     {
         if (!_started)
         {
             return;
         }
+        _sedpPublicationsWriter.Stop();
+        _sedpSubscriptionsWriter.Stop();
+        _sedpPublicationsReader.Stop();
+        _sedpSubscriptionsReader.Stop();
         _spdpWriter.Stop();
         _spdpReader.Stop();
         _userMulticastTransport.Stop();
@@ -181,9 +248,9 @@ public sealed class DomainParticipant : IDisposable
     /// <summary>
     /// 指定トピックの Publisher を生成する。
     /// EntityId は <see cref="UserEntityIdAllocator"/> によりトピック名から決定論的に割り当てる
-    /// (SEDP 未実装の Phase 5 ではこれが Pub/Sub matching の手段)。
+    /// (Phase 5 互換)。同時にローカル endpoint 一覧へ登録され、SEDP で広告される (Phase 6)。
     /// </summary>
-    public Publisher<T> CreatePublisher<T>(string topicName, ICdrSerializer<T> serializer)
+    public Publisher<T> CreatePublisher<T>(string topicName, ICdrSerializer<T> serializer, string? typeName = null)
     {
         ThrowIfDisposed();
         ArgumentException.ThrowIfNullOrEmpty(topicName);
@@ -199,17 +266,34 @@ public sealed class DomainParticipant : IDisposable
             GuidPrefix,
             writerEntityId,
             _options.Logger);
+
+        // SEDP 用に登録
+        var endpointGuid = new Guid(GuidPrefix, writerEntityId);
+        var endpointData = new DiscoveredEndpointData
+        {
+            Kind = EndpointKind.Writer,
+            EndpointGuid = endpointGuid,
+            ParticipantGuid = Guid,
+            TopicName = ddsTopic,
+            TypeName = typeName ?? "",
+            Reliability = ReliabilityQos.BestEffort,
+            Durability = DurabilityQos.Volatile,
+        };
+        lock (_localEndpointsLock) { _localWriters.Add(endpointData); }
+
         return new Publisher<T>(topicName, writer, serializer);
     }
 
     /// <summary>
     /// 指定トピックの Subscription を生成する。
     /// 受信ループは即座に開始され、マッチする DATA を受信するとハンドラが呼ばれる。
+    /// 同時にローカル endpoint 一覧へ登録され、SEDP で広告される (Phase 6)。
     /// </summary>
     public Subscription<T> CreateSubscription<T>(
         string topicName,
         ICdrSerializer<T> serializer,
-        Action<T, GuidPrefix> handler)
+        Action<T, GuidPrefix> handler,
+        string? typeName = null)
     {
         ThrowIfDisposed();
         ArgumentException.ThrowIfNullOrEmpty(topicName);
@@ -218,7 +302,23 @@ public sealed class DomainParticipant : IDisposable
 
         var ddsTopic = TopicNameMangler.MangleTopic(topicName);
         var writerEntityId = UserEntityIdAllocator.WriterFor(ddsTopic);
+        var readerEntityId = UserEntityIdAllocator.ReaderFor(ddsTopic);
         var reader = new StatelessReader(_userMulticastTransport, writerEntityId, _options.Logger);
+
+        // SEDP 用に登録 (この participant の reader endpoint を広告)
+        var endpointGuid = new Guid(GuidPrefix, readerEntityId);
+        var endpointData = new DiscoveredEndpointData
+        {
+            Kind = EndpointKind.Reader,
+            EndpointGuid = endpointGuid,
+            ParticipantGuid = Guid,
+            TopicName = ddsTopic,
+            TypeName = typeName ?? "",
+            Reliability = ReliabilityQos.BestEffort,
+            Durability = DurabilityQos.Volatile,
+        };
+        lock (_localEndpointsLock) { _localReaders.Add(endpointData); }
+
         return new Subscription<T>(topicName, reader, serializer, handler);
     }
 
@@ -237,6 +337,10 @@ public sealed class DomainParticipant : IDisposable
         }
         _disposed = true;
         Stop();
+        _sedpPublicationsWriter.Dispose();
+        _sedpSubscriptionsWriter.Dispose();
+        _sedpPublicationsReader.Dispose();
+        _sedpSubscriptionsReader.Dispose();
         _spdpWriter.Dispose();
         _spdpReader.Dispose();
         if (_ownsUserMulticastTransport)

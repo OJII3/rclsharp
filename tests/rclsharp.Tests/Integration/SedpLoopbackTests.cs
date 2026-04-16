@@ -1,0 +1,177 @@
+using System.Net;
+using Rclsharp.Common;
+using Rclsharp.Dds;
+using Rclsharp.Discovery;
+using Rclsharp.Msgs.Std;
+using Rclsharp.Transport;
+
+namespace Rclsharp.Tests.Integration;
+
+public class SedpLoopbackTests
+{
+    private static readonly TimeSpan DiscoveryTimeout = TimeSpan.FromSeconds(2);
+
+    private sealed class TestEnv
+    {
+        public required LoopbackHub Hub { get; init; }
+        public required DomainParticipant ParticipantA { get; init; }
+        public required DomainParticipant ParticipantB { get; init; }
+    }
+
+    private static TestEnv CreatePair()
+    {
+        var hub = new LoopbackHub();
+        var multicastIp = IPAddress.Parse("239.255.0.1");
+        var spdpLoc = Locator.FromUdpV4(multicastIp, 7400u);
+        var userMcLoc = Locator.FromUdpV4(multicastIp, 7401u);
+
+        var spdpA = hub.Create(spdpLoc);
+        var spdpB = hub.Create(spdpLoc);
+        var ucA = hub.Create(Locator.FromUdpV4(IPAddress.Parse("10.0.0.1"), 7411u));
+        var ucB = hub.Create(Locator.FromUdpV4(IPAddress.Parse("10.0.0.2"), 7413u));
+        var userMcA = hub.Create(userMcLoc);
+        var userMcB = hub.Create(userMcLoc);
+
+        var optionsA = new DomainParticipantOptions
+        {
+            DomainId = 0, ParticipantId = 1, EntityName = "node_a",
+            MulticastGroup = multicastIp,
+            SpdpInterval = TimeSpan.FromMilliseconds(50),
+            SedpInterval = TimeSpan.FromMilliseconds(50),
+            CustomMulticastTransport = spdpA,
+            CustomUnicastTransport = ucA,
+            CustomUserMulticastTransport = userMcA,
+        };
+        var optionsB = new DomainParticipantOptions
+        {
+            DomainId = 0, ParticipantId = 2, EntityName = "node_b",
+            MulticastGroup = multicastIp,
+            SpdpInterval = TimeSpan.FromMilliseconds(50),
+            SedpInterval = TimeSpan.FromMilliseconds(50),
+            CustomMulticastTransport = spdpB,
+            CustomUnicastTransport = ucB,
+            CustomUserMulticastTransport = userMcB,
+        };
+
+        return new TestEnv
+        {
+            Hub = hub,
+            ParticipantA = new DomainParticipant(optionsA),
+            ParticipantB = new DomainParticipant(optionsB),
+        };
+    }
+
+    [Fact]
+    public async Task pA_の_Publisher_endpoint_を_pB_が_SEDP_で発見()
+    {
+        var env = CreatePair();
+        using var pA = env.ParticipantA;
+        using var pB = env.ParticipantB;
+
+        var writerSeenByB = new TaskCompletionSource<RemoteEndpoint>(TaskCreationOptions.RunContinuationsAsynchronously);
+        pB.DiscoveryDb.WriterDiscovered += ep =>
+        {
+            if (ep.Data.ParticipantGuid.Prefix.Equals(pA.GuidPrefix))
+            {
+                writerSeenByB.TrySetResult(ep);
+            }
+        };
+
+        // pA に Publisher を作る (SEDP に登録される)
+        using var pub = pA.CreatePublisher<StringMessage>(
+            "chatter", StringMessageSerializer.Instance, typeName: StringMessage.DdsTypeName);
+
+        pA.Start();
+        pB.Start();
+
+        var ep = await writerSeenByB.Task.WaitAsync(DiscoveryTimeout);
+        ep.Data.TopicName.Should().Be("rt/chatter");
+        ep.Data.TypeName.Should().Be(StringMessage.DdsTypeName);
+        ep.Data.Kind.Should().Be(EndpointKind.Writer);
+        ep.Data.ParticipantGuid.Prefix.Should().Be(pA.GuidPrefix);
+    }
+
+    [Fact]
+    public async Task pA_の_Subscription_endpoint_を_pB_が_SEDP_で発見()
+    {
+        var env = CreatePair();
+        using var pA = env.ParticipantA;
+        using var pB = env.ParticipantB;
+
+        var readerSeenByB = new TaskCompletionSource<RemoteEndpoint>(TaskCreationOptions.RunContinuationsAsynchronously);
+        pB.DiscoveryDb.ReaderDiscovered += ep =>
+        {
+            if (ep.Data.ParticipantGuid.Prefix.Equals(pA.GuidPrefix))
+            {
+                readerSeenByB.TrySetResult(ep);
+            }
+        };
+
+        using var sub = pA.CreateSubscription<StringMessage>(
+            "chatter", StringMessageSerializer.Instance,
+            (_, _) => { },
+            typeName: StringMessage.DdsTypeName);
+
+        pA.Start();
+        pB.Start();
+
+        var ep = await readerSeenByB.Task.WaitAsync(DiscoveryTimeout);
+        ep.Data.TopicName.Should().Be("rt/chatter");
+        ep.Data.Kind.Should().Be(EndpointKind.Reader);
+    }
+
+    [Fact]
+    public async Task 双方の_Pub_Sub_を_互いに_発見()
+    {
+        var env = CreatePair();
+        using var pA = env.ParticipantA;
+        using var pB = env.ParticipantB;
+
+        using var pubA = pA.CreatePublisher<StringMessage>(
+            "chatter", StringMessageSerializer.Instance, typeName: StringMessage.DdsTypeName);
+        using var subB = pB.CreateSubscription<StringMessage>(
+            "chatter", StringMessageSerializer.Instance, (_, _) => { },
+            typeName: StringMessage.DdsTypeName);
+
+        pA.Start();
+        pB.Start();
+
+        // SEDP 周期 (50ms) を 4 回ぶん待つ
+        await Task.Delay(300);
+
+        // pB は pA の Writer (chatter) を見ているはず
+        pB.DiscoveryDb.WriterCount.Should().BeGreaterThan(0);
+        var pbWriters = pB.DiscoveryDb.WriterSnapshot();
+        pbWriters.Should().Contain(ep => ep.Data.TopicName == "rt/chatter");
+
+        // pA は pB の Reader (chatter) を見ているはず
+        pA.DiscoveryDb.ReaderCount.Should().BeGreaterThan(0);
+        var paReaders = pA.DiscoveryDb.ReaderSnapshot();
+        paReaders.Should().Contain(ep => ep.Data.TopicName == "rt/chatter");
+    }
+
+    [Fact]
+    public async Task SEDP_と_並行して_Best_Effort_配信が成立する()
+    {
+        var env = CreatePair();
+        using var pA = env.ParticipantA;
+        using var pB = env.ParticipantB;
+
+        var receivedTcs = new TaskCompletionSource<StringMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var sub = pB.CreateSubscription<StringMessage>(
+            "chatter", StringMessageSerializer.Instance,
+            (msg, _) => receivedTcs.TrySetResult(msg),
+            typeName: StringMessage.DdsTypeName);
+
+        using var pub = pA.CreatePublisher<StringMessage>(
+            "chatter", StringMessageSerializer.Instance, typeName: StringMessage.DdsTypeName);
+
+        pA.Start();
+        pB.Start();
+
+        await pub.PublishAsync(new StringMessage("via sedp era"));
+
+        var msg = await receivedTcs.Task.WaitAsync(DiscoveryTimeout);
+        msg.Data.Should().Be("via sedp era");
+    }
+}

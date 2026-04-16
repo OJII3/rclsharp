@@ -16,6 +16,9 @@ public sealed class DomainParticipantOptions
     /// <summary>SPDP の送信間隔。既定 3 秒 (ROS 2 既定値)。</summary>
     public TimeSpan SpdpInterval { get; init; } = TimeSpan.FromSeconds(3);
 
+    /// <summary>SEDP (Publications/Subscriptions) の送信間隔。既定 3 秒。</summary>
+    public TimeSpan SedpInterval { get; init; } = TimeSpan.FromSeconds(3);
+
     /// <summary>SPDP の Lease Duration (この時間更新がなければ Lost と判定)。既定 20 秒。</summary>
     public Duration LeaseDuration { get; init; } = Duration.FromSeconds(20);
 
