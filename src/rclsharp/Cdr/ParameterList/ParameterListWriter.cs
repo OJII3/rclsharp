@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Diagnostics.CodeAnalysis;
 
 namespace Rclsharp.Cdr.ParameterList;
 
@@ -21,8 +20,26 @@ public ref struct ParameterListWriter
 
     public CdrEndianness Endianness => _writer.Endianness;
 
-    [UnscopedRef]
-    public ref CdrWriter Inner => ref _writer;
+    /// <summary>現在の内部 CdrWriter のスナップショット。呼び出し元 writer に反映するには代入で受け戻す。</summary>
+    public CdrWriter CurrentWriter => _writer;
+
+    // 以下、値書き込みは開いているパラメータ値領域へ内部 CdrWriter を通して行うパススルー。
+    // ref 返し (C# 11 scoped ref) が使えない処理系でも通るよう、ref プロパティではなく
+    // 明示的メソッドを公開している。
+    public void WriteByte(byte value) => _writer.WriteByte(value);
+    public void WriteBool(bool value) => _writer.WriteBool(value);
+    public void WriteInt16(short value) => _writer.WriteInt16(value);
+    public void WriteUInt16(ushort value) => _writer.WriteUInt16(value);
+    public void WriteInt32(int value) => _writer.WriteInt32(value);
+    public void WriteUInt32(uint value) => _writer.WriteUInt32(value);
+    public void WriteInt64(long value) => _writer.WriteInt64(value);
+    public void WriteUInt64(ulong value) => _writer.WriteUInt64(value);
+    public void WriteFloat(float value) => _writer.WriteFloat(value);
+    public void WriteDouble(double value) => _writer.WriteDouble(value);
+    public void WriteString(string? value) => _writer.WriteString(value);
+    public void WriteString(ReadOnlySpan<char> value) => _writer.WriteString(value);
+    public void WriteRawBytes(ReadOnlySpan<byte> bytes) => _writer.WriteRawBytes(bytes);
+    public void AlignTo(int alignment) => _writer.AlignTo(alignment);
 
     public ParameterListWriter(CdrWriter writer)
     {

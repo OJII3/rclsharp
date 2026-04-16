@@ -23,7 +23,7 @@ public static class UserEntityIdAllocator
 
     private static EntityId Allocate(string topicName, EntityKind kind)
     {
-        ArgumentException.ThrowIfNullOrEmpty(topicName);
+        if (string.IsNullOrEmpty(topicName)) throw new ArgumentException("Value cannot be null or empty.", nameof(topicName));
         uint key = Fnv1a24(topicName);
         return new EntityId(key, kind);
     }

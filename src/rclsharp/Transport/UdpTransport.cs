@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using Rclsharp.Common;
 using Rclsharp.Common.Logging;
 
@@ -62,7 +63,7 @@ public sealed class UdpTransport : IRtpsTransport
         ILogger? logger = null,
         int receiveBufferSize = 65535)
     {
-        ArgumentNullException.ThrowIfNull(bindAddress);
+        if (bindAddress is null) throw new ArgumentNullException(nameof(bindAddress));
         if (bindAddress.AddressFamily != AddressFamily.InterNetwork)
         {
             throw new ArgumentException("Only IPv4 bindAddress supported in Phase 2.", nameof(bindAddress));
@@ -96,7 +97,7 @@ public sealed class UdpTransport : IRtpsTransport
         int receiveBufferSize = 65535,
         int multicastTimeToLive = 1)
     {
-        ArgumentNullException.ThrowIfNull(multicastGroup);
+        if (multicastGroup is null) throw new ArgumentNullException(nameof(multicastGroup));
         if (multicastGroup.AddressFamily != AddressFamily.InterNetwork)
         {
             throw new ArgumentException("Only IPv4 multicast supported in Phase 2.", nameof(multicastGroup));
@@ -134,8 +135,12 @@ public sealed class UdpTransport : IRtpsTransport
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
         var endpoint = LocatorToEndPoint(destination);
-        await _socket.SendToAsync(packet, SocketFlags.None, endpoint, cancellationToken).ConfigureAwait(false);
+        var segment = MemoryMarshal.TryGetArray(packet, out var s)
+            ? s
+            : new ArraySegment<byte>(packet.ToArray());
+        await _socket.SendToAsync(segment, SocketFlags.None, endpoint).ConfigureAwait(false);
     }
 
     public void Start()
@@ -184,11 +189,12 @@ public sealed class UdpTransport : IRtpsTransport
             byte[] buffer = pool.Rent(_receiveBufferSize);
             try
             {
-                var result = await _socket.ReceiveFromAsync(
-                    buffer.AsMemory(0, _receiveBufferSize),
+                var recvTask = _socket.ReceiveFromAsync(
+                    new ArraySegment<byte>(buffer, 0, _receiveBufferSize),
                     SocketFlags.None,
-                    endpoint,
-                    cancellationToken).ConfigureAwait(false);
+                    endpoint);
+                using var reg = cancellationToken.Register(() => { try { _socket.Close(); } catch { } });
+                var result = await recvTask.ConfigureAwait(false);
 
                 if (result.RemoteEndPoint is not IPEndPoint src)
                 {
@@ -260,6 +266,6 @@ public sealed class UdpTransport : IRtpsTransport
 
     private void ThrowIfDisposed()
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_disposed) throw new ObjectDisposedException(GetType().Name);
     }
 }

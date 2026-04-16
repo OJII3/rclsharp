@@ -23,46 +23,46 @@ public static class DiscoveredEndpointDataSerializer
         pl.BeginParameter(ParameterId.ParticipantGuid);
         var pgBytes = new byte[Guid.Size];
         data.ParticipantGuid.WriteTo(pgBytes);
-        pl.Inner.WriteRawBytes(pgBytes);
+        pl.WriteRawBytes(pgBytes);
         pl.EndParameter();
 
         // ENDPOINT_GUID (16B)
         pl.BeginParameter(ParameterId.EndpointGuid);
         var egBytes = new byte[Guid.Size];
         data.EndpointGuid.WriteTo(egBytes);
-        pl.Inner.WriteRawBytes(egBytes);
+        pl.WriteRawBytes(egBytes);
         pl.EndParameter();
 
         // KEY_HASH (16B = endpoint guid)
         pl.BeginParameter(ParameterId.KeyHash);
-        pl.Inner.WriteRawBytes(egBytes);
+        pl.WriteRawBytes(egBytes);
         pl.EndParameter();
 
         // TOPIC_NAME (string)
         pl.BeginParameter(ParameterId.TopicName);
-        pl.Inner.WriteString(data.TopicName);
+        pl.WriteString(data.TopicName);
         pl.EndParameter();
 
         // TYPE_NAME (string)
         pl.BeginParameter(ParameterId.TypeName);
-        pl.Inner.WriteString(data.TypeName);
+        pl.WriteString(data.TypeName);
         pl.EndParameter();
 
         // RELIABILITY (4B kind + 8B Duration = 12B)
         pl.BeginParameter(ParameterId.Reliability);
-        pl.Inner.WriteInt32((int)data.Reliability.Kind);
+        pl.WriteInt32((int)data.Reliability.Kind);
         var blockingBytes = new byte[Duration.Size];
         data.Reliability.MaxBlockingTime.WriteTo(blockingBytes, littleEndian);
-        pl.Inner.WriteRawBytes(blockingBytes);
+        pl.WriteRawBytes(blockingBytes);
         pl.EndParameter();
 
         // DURABILITY (4B kind)
         pl.BeginParameter(ParameterId.Durability);
-        pl.Inner.WriteInt32((int)data.Durability.Kind);
+        pl.WriteInt32((int)data.Durability.Kind);
         pl.EndParameter();
 
         pl.WriteSentinel();
-        writer = pl.Inner;
+        writer = pl.CurrentWriter;
     }
 
     /// <summary>PL_CDR ParameterList を読み出して <see cref="DiscoveredEndpointData"/> を生成する。</summary>
@@ -95,14 +95,14 @@ public static class DiscoveredEndpointDataSerializer
                         break;
                     }
                 case ParameterId.TopicName:
-                    data.TopicName = pl.Inner.ReadString();
+                    data.TopicName = pl.ReadString();
                     break;
                 case ParameterId.TypeName:
-                    data.TypeName = pl.Inner.ReadString();
+                    data.TypeName = pl.ReadString();
                     break;
                 case ParameterId.Reliability:
                     {
-                        var rkind = (ReliabilityKind)pl.Inner.ReadInt32();
+                        var rkind = (ReliabilityKind)pl.ReadInt32();
                         var raw = pl.CurrentValueRaw();
                         // 残り 8B が Duration
                         var blocking = raw.Length >= 12
@@ -112,7 +112,7 @@ public static class DiscoveredEndpointDataSerializer
                         break;
                     }
                 case ParameterId.Durability:
-                    data.Durability = new DurabilityQos((DurabilityKind)pl.Inner.ReadInt32());
+                    data.Durability = new DurabilityQos((DurabilityKind)pl.ReadInt32());
                     break;
                 case ParameterId.KeyHash:
                     // EndpointGuid と冗長なため明示的に消費 (skip)
@@ -123,7 +123,7 @@ public static class DiscoveredEndpointDataSerializer
             }
         }
 
-        reader = pl.Inner;
+        reader = pl.CurrentReader;
         return data;
     }
 }

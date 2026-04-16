@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Rclsharp.Common;
 
@@ -30,7 +31,7 @@ public struct Locator : IEquatable<Locator>
         Kind = kind;
         Port = port;
         _address = default;
-        address.CopyTo(_address);
+        address.CopyTo(_address.AsSpan());
     }
 
     /// <summary>すべての値が無効な LOCATOR_INVALID。</summary>
@@ -76,18 +77,13 @@ public struct Locator : IEquatable<Locator>
         return new Locator(LocatorKind.UdpV6, port, bytes);
     }
 
-    public byte this[int index] => _address[index];
+    public byte this[int index] => _address.ElementAt(index);
 
-    public ReadOnlySpan<byte> AddressSpan
-    {
-        [UnscopedRef]
-        get => _address;
-    }
-
+    /// <summary>アドレス領域 16 バイトを新しい配列にコピーして返す (ヒープ確保あり)。</summary>
     public byte[] AddressBytes()
     {
         var arr = new byte[AddressSize];
-        ((ReadOnlySpan<byte>)_address).CopyTo(arr);
+        _address.AsReadOnlySpan().CopyTo(arr);
         return arr;
     }
 
@@ -96,8 +92,8 @@ public struct Locator : IEquatable<Locator>
     {
         return Kind switch
         {
-            LocatorKind.UdpV4 => new IPAddress(((ReadOnlySpan<byte>)_address)[12..16].ToArray()),
-            LocatorKind.UdpV6 => new IPAddress(((ReadOnlySpan<byte>)_address).ToArray()),
+            LocatorKind.UdpV4 => new IPAddress(_address.AsSpan()[12..16].ToArray()),
+            LocatorKind.UdpV6 => new IPAddress(_address.AsSpan().ToArray()),
             _ => IPAddress.None,
         };
     }
@@ -119,7 +115,7 @@ public struct Locator : IEquatable<Locator>
             BinaryPrimitives.WriteInt32BigEndian(destination, (int)Kind);
             BinaryPrimitives.WriteUInt32BigEndian(destination[4..], Port);
         }
-        ReadOnlySpan<byte> addr = _address;
+        ReadOnlySpan<byte> addr = _address.AsSpan();
         addr.CopyTo(destination[8..24]);
     }
 
@@ -145,8 +141,8 @@ public struct Locator : IEquatable<Locator>
         {
             return false;
         }
-        ReadOnlySpan<byte> a = _address;
-        ReadOnlySpan<byte> b = other._address;
+        ReadOnlySpan<byte> a = _address.AsSpan();
+        ReadOnlySpan<byte> b = other._address.AsSpan();
         return a.SequenceEqual(b);
     }
 
@@ -157,8 +153,9 @@ public struct Locator : IEquatable<Locator>
         var hash = new HashCode();
         hash.Add((int)Kind);
         hash.Add(Port);
-        ReadOnlySpan<byte> bytes = _address;
-        hash.AddBytes(bytes);
+        ReadOnlySpan<byte> bytes = _address.AsSpan();
+        for (int i = 0; i < bytes.Length; i++)
+            hash.Add(bytes[i]);
         return hash.ToHashCode();
     }
 
@@ -169,7 +166,7 @@ public struct Locator : IEquatable<Locator>
             LocatorKind.UdpV4 => $"UDPv4://{ToIPAddress()}:{Port}",
             LocatorKind.UdpV6 => $"UDPv6://[{ToIPAddress()}]:{Port}",
             LocatorKind.Invalid => "INVALID",
-            _ => $"{Kind}://{Convert.ToHexString(AddressSpan)}:{Port}",
+            _ => $"{Kind}://{HexUtil.ToHexString(_address.AsReadOnlySpan())}:{Port}",
         };
     }
 
@@ -178,10 +175,24 @@ public struct Locator : IEquatable<Locator>
 }
 
 /// <summary>
-/// Locator のアドレス領域 (16 バイト) を InlineArray で確保するストレージ型。
+/// Locator のアドレス領域 (16 バイト) を値型として確保するストレージ。
+/// アクセスは <see cref="LocatorAddressStorageExtensions"/> の <c>ref this</c> 拡張経由。
 /// </summary>
-[InlineArray(Locator.AddressSize)]
+[StructLayout(LayoutKind.Sequential, Size = Locator.AddressSize)]
 internal struct LocatorAddressStorage
 {
-    private byte _element0;
+    internal byte First;
+}
+
+internal static class LocatorAddressStorageExtensions
+{
+    public static Span<byte> AsSpan(ref this LocatorAddressStorage storage)
+        => MemoryMarshal.CreateSpan(ref storage.First, Locator.AddressSize);
+
+    public static ReadOnlySpan<byte> AsReadOnlySpan(in this LocatorAddressStorage storage)
+        => MemoryMarshal.CreateReadOnlySpan(
+            ref Unsafe.AsRef(in storage).First, Locator.AddressSize);
+
+    public static byte ElementAt(in this LocatorAddressStorage storage, int index)
+        => storage.AsReadOnlySpan()[index];
 }

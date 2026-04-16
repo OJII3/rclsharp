@@ -103,7 +103,7 @@ public sealed class LoopbackTransport : IRtpsTransport
         // 配信側にコピーを渡す (呼び出し元バッファの再利用に対する安全策)
         var copy = packet.ToArray();
         _hub.Deliver(copy, destination, LocalLocator);
-        return ValueTask.CompletedTask;
+        return default;
     }
 
     /// <summary>Loopback では受信ループ不要のため no-op。</summary>

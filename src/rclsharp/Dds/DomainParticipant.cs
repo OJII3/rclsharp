@@ -60,7 +60,7 @@ public sealed class DomainParticipant : IDisposable
 
     public DomainParticipant(DomainParticipantOptions options)
     {
-        ArgumentNullException.ThrowIfNull(options);
+        if (options is null) throw new ArgumentNullException(nameof(options));
         _options = options;
 
         GuidPrefix = GuidPrefix.CreateForCurrentProcess(_options.VendorId);
@@ -290,8 +290,8 @@ public sealed class DomainParticipant : IDisposable
     public Publisher<T> CreatePublisher<T>(string topicName, ICdrSerializer<T> serializer, string? typeName = null)
     {
         ThrowIfDisposed();
-        ArgumentException.ThrowIfNullOrEmpty(topicName);
-        ArgumentNullException.ThrowIfNull(serializer);
+        if (string.IsNullOrEmpty(topicName)) throw new ArgumentException("Value cannot be null or empty.", nameof(topicName));
+        if (serializer is null) throw new ArgumentNullException(nameof(serializer));
 
         var ddsTopic = TopicNameMangler.MangleTopic(topicName);
         var writerEntityId = UserEntityIdAllocator.WriterFor(ddsTopic);
@@ -334,9 +334,9 @@ public sealed class DomainParticipant : IDisposable
         string? typeName = null)
     {
         ThrowIfDisposed();
-        ArgumentException.ThrowIfNullOrEmpty(topicName);
-        ArgumentNullException.ThrowIfNull(serializer);
-        ArgumentNullException.ThrowIfNull(handler);
+        if (string.IsNullOrEmpty(topicName)) throw new ArgumentException("Value cannot be null or empty.", nameof(topicName));
+        if (serializer is null) throw new ArgumentNullException(nameof(serializer));
+        if (handler is null) throw new ArgumentNullException(nameof(handler));
 
         var ddsTopic = TopicNameMangler.MangleTopic(topicName);
         var writerEntityId = UserEntityIdAllocator.WriterFor(ddsTopic);
@@ -398,6 +398,6 @@ public sealed class DomainParticipant : IDisposable
 
     private void ThrowIfDisposed()
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_disposed) throw new ObjectDisposedException(GetType().Name);
     }
 }

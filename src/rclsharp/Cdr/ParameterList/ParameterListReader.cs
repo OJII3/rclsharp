@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.InteropServices;
 
 namespace Rclsharp.Cdr.ParameterList;
 
@@ -15,8 +16,23 @@ public ref struct ParameterListReader
 
     public CdrEndianness Endianness => _reader.Endianness;
 
-    [UnscopedRef]
-    public ref CdrReader Inner => ref _reader;
+    /// <summary>現在の内部 CdrReader のスナップショット。呼び出し元 reader に反映するには代入で受け戻す。</summary>
+    public CdrReader CurrentReader => _reader;
+
+    // 値読み出しのパススルー。ref 返しを避けるため、writer 側と同じく明示メソッドにする。
+    public byte ReadByte() => _reader.ReadByte();
+    public bool ReadBool() => _reader.ReadBool();
+    public short ReadInt16() => _reader.ReadInt16();
+    public ushort ReadUInt16() => _reader.ReadUInt16();
+    public int ReadInt32() => _reader.ReadInt32();
+    public uint ReadUInt32() => _reader.ReadUInt32();
+    public long ReadInt64() => _reader.ReadInt64();
+    public ulong ReadUInt64() => _reader.ReadUInt64();
+    public float ReadFloat() => _reader.ReadFloat();
+    public double ReadDouble() => _reader.ReadDouble();
+    public string ReadString() => _reader.ReadString();
+    public void AlignTo(int alignment) => _reader.AlignTo(alignment);
+    public void Skip(int count) => _reader.Skip(count);
 
     public ParameterListReader(CdrReader reader)
     {

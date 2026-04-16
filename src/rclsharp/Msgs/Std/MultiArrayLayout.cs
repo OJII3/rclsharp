@@ -51,7 +51,7 @@ public sealed class MultiArrayLayoutSerializer : ICdrSerializer<MultiArrayLayout
 
     public void Serialize(ref CdrWriter writer, in MultiArrayLayout value)
     {
-        var dim = value.Dim ?? [];
+        var dim = value.Dim ?? Array.Empty<MultiArrayDimension>();
         writer.WriteSequenceLength(dim.Length);
         var dimSer = MultiArrayDimensionSerializer.Instance;
         foreach (ref readonly var d in dim.AsSpan())
@@ -64,7 +64,7 @@ public sealed class MultiArrayLayoutSerializer : ICdrSerializer<MultiArrayLayout
     public void Deserialize(ref CdrReader reader, out MultiArrayLayout value)
     {
         int count = reader.ReadSequenceLength();
-        var dim = count == 0 ? [] : new MultiArrayDimension[count];
+        var dim = count == 0 ? Array.Empty<MultiArrayDimension>() : new MultiArrayDimension[count];
         var dimSer = MultiArrayDimensionSerializer.Instance;
         for (int i = 0; i < count; i++)
         {
