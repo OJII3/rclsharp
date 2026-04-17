@@ -6,8 +6,14 @@
     nixpkgs.follows = "nix-ros-overlay/nixpkgs";
   };
 
-  outputs = { self, nix-ros-overlay, nixpkgs }:
-    nix-ros-overlay.inputs.flake-utils.lib.eachDefaultSystem (system:
+  outputs =
+    {
+      self,
+      nix-ros-overlay,
+      nixpkgs,
+    }:
+    nix-ros-overlay.inputs.flake-utils.lib.eachDefaultSystem (
+      system:
       let
         pkgs = import nixpkgs {
           inherit system;
@@ -15,11 +21,11 @@
         };
         rosEnv = pkgs.rosPackages.humble.buildEnv {
           paths = with pkgs.rosPackages.humble; [
-            ros-core
-            demo-nodes-cpp
+            ros-base
           ];
         };
-      in {
+      in
+      {
         devShells.default = pkgs.mkShell {
           name = "rclsharp";
           packages = [
@@ -30,7 +36,8 @@
           DOTNET_CLI_TELEMETRY_OPTOUT = "1";
           DOTNET_NOLOGO = "1";
         };
-      });
+      }
+    );
 
   nixConfig = {
     extra-substituters = [ "https://ros.cachix.org" ];
