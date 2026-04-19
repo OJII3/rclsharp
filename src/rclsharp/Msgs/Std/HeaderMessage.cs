@@ -37,6 +37,8 @@ public sealed class HeaderMessageSerializer : ICdrSerializer<HeaderMessage>
 
     public int GetSerializedSize(in HeaderMessage value)
     {
+        // stamp(8) + length(4) + utf8 + NUL(1)。他 msg に埋め込まれた際の
+        // 先頭 4-align パディングは上限計算で省略 (MultiArrayLayout と同方針)。
         int strLen = value.FrameId is null ? 0 : System.Text.Encoding.UTF8.GetByteCount(value.FrameId);
         return 8 + 4 + strLen + 1;
     }

@@ -72,4 +72,26 @@ public class HeaderMessageTests
         var read = Deserialize(HeaderMessageSerializer.Instance, bytes, endian);
         read.FrameId.Should().Be("日本語フレーム");
     }
+
+    [Fact]
+    public void Header_GetSerializedSize_は_stamp_と_frame_id_長さで決まる()
+    {
+        // stamp(8) + length(4) + "x"(1) + NUL(1) = 14
+        var h = new HeaderMessage(new Time(0, 0u), "x");
+        HeaderMessageSerializer.Instance.GetSerializedSize(in h).Should().Be(14);
+
+        // 空文字列でも length + NUL の 5B は必要: 8 + 4 + 0 + 1 = 13
+        var empty = new HeaderMessage(new Time(0, 0u), string.Empty);
+        HeaderMessageSerializer.Instance.GetSerializedSize(in empty).Should().Be(13);
+    }
+
+    [Fact]
+    public void Header_ROS2版は_seq_フィールドを持たない()
+    {
+        // ROS 1 の Header は uint32 seq + stamp + frame_id で最低 4+8+4+NUL=17B だが、
+        // ROS 2 版は seq 無しのため stamp(8) + length(4) + "x"(1) + NUL(1) = 14B になる。
+        var h = new HeaderMessage(new Time(0, 0u), "x");
+        var bytes = Serialize(HeaderMessageSerializer.Instance, in h, CdrEndianness.LittleEndian);
+        bytes.Length.Should().Be(14);
+    }
 }
