@@ -47,6 +47,9 @@ public sealed class DomainParticipant : IDisposable
     private readonly List<DiscoveredEndpointData> _localWriters = new();
     private readonly List<DiscoveredEndpointData> _localReaders = new();
 
+    // ローカル StatelessWriter をトピック名でルックアップ (remote reader マッチング用)
+    private readonly Dictionary<string, StatelessWriter> _localStatelessWriters = new();
+
     private bool _started;
     private bool _disposed;
 
@@ -210,6 +213,9 @@ public sealed class DomainParticipant : IDisposable
 
         // SPDP で remote participant を発見したら SEDP endpoint を auto-match
         _discoveryDb.ParticipantDiscovered += OnRemoteParticipantDiscovered;
+
+        // SEDP で remote reader を発見したらローカル writer にユニキャストロケータを追加
+        _discoveryDb.ReaderDiscovered += OnRemoteReaderDiscovered;
     }
 
     private void OnRemoteParticipantDiscovered(RemoteParticipant participant)
@@ -235,6 +241,46 @@ public sealed class DomainParticipant : IDisposable
         _sedpSubscriptionsReader.MatchRemoteWriter(remoteSedpSubWriter, remoteUnicast);
 
         _options.Logger.Debug($"DomainParticipant: auto-matched SEDP endpoints for {participant.Guid}");
+    }
+
+    private void OnRemoteReaderDiscovered(RemoteEndpoint remoteReader)
+    {
+        var topicName = remoteReader.TopicName;
+        StatelessWriter? writer;
+        lock (_localEndpointsLock)
+        {
+            _localStatelessWriters.TryGetValue(topicName, out writer);
+        }
+        if (writer is null) return;
+
+        // remote reader のユニキャストロケータ (SEDP endpoint data から取得)
+        // endpoint data にロケータがあればそれを使い、なければ participant の default unicast を使う
+        var locators = remoteReader.Data.UnicastLocators;
+        if (locators.Count > 0)
+        {
+            foreach (var loc in locators)
+            {
+                writer.AddMatchedReaderLocator(loc);
+            }
+        }
+        else
+        {
+            // endpoint にロケータがない場合は participant の DEFAULT_UNICAST_LOCATOR にフォールバック
+            var participants = _discoveryDb.Snapshot();
+            foreach (var p in participants)
+            {
+                if (p.GuidPrefix.Equals(remoteReader.Data.EndpointGuid.Prefix))
+                {
+                    foreach (var loc in p.Data.DefaultUnicastLocators)
+                    {
+                        writer.AddMatchedReaderLocator(loc);
+                    }
+                    break;
+                }
+            }
+        }
+
+        _options.Logger.Debug($"DomainParticipant: matched local writer with remote reader on topic={topicName}");
     }
 
     /// <summary>送受信トランスポートと SPDP の起動。</summary>
@@ -329,7 +375,8 @@ public sealed class DomainParticipant : IDisposable
             _options.VendorId,
             GuidPrefix,
             writerEntityId,
-            _options.Logger);
+            _options.Logger,
+            unicastTransport: _userUnicastTransport);
 
         // SEDP 用に登録 (即時 publish)
         var endpointGuid = new Guid(GuidPrefix, writerEntityId);
@@ -345,7 +392,11 @@ public sealed class DomainParticipant : IDisposable
         };
         endpointData.UnicastLocators.Add(_defaultUnicastLocator);
         endpointData.MulticastLocators.Add(_defaultMulticastLocator);
-        lock (_localEndpointsLock) { _localWriters.Add(endpointData); }
+        lock (_localEndpointsLock)
+        {
+            _localWriters.Add(endpointData);
+            _localStatelessWriters[ddsTopic] = writer;
+        }
         _ = _sedpPublicationsWriter.AddEndpointAsync(endpointData);
 
         return new Publisher<T>(topicName, writer, serializer);

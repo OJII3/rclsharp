@@ -24,6 +24,11 @@ public class SpdpLoopbackTests
         var mcB = hub.Create(multicastLoc);
         var ucA = hub.Create(unicastA);
         var ucB = hub.Create(unicastB);
+        var userMcLoc = Locator.FromUdpV4(multicastIp, 7401u);
+        var userMcA = hub.Create(userMcLoc);
+        var userMcB = hub.Create(userMcLoc);
+        var userUcA = hub.Create(Locator.FromUdpV4(IPAddress.Parse("10.0.0.1"), 7412u));
+        var userUcB = hub.Create(Locator.FromUdpV4(IPAddress.Parse("10.0.0.2"), 7414u));
 
         var optionsA = new DomainParticipantOptions
         {
@@ -34,6 +39,8 @@ public class SpdpLoopbackTests
             SpdpInterval = TimeSpan.FromMilliseconds(50),
             CustomMulticastTransport = mcA,
             CustomUnicastTransport = ucA,
+            CustomUserMulticastTransport = userMcA,
+            CustomUserUnicastTransport = userUcA,
         };
         var optionsB = new DomainParticipantOptions
         {
@@ -44,6 +51,8 @@ public class SpdpLoopbackTests
             SpdpInterval = TimeSpan.FromMilliseconds(50),
             CustomMulticastTransport = mcB,
             CustomUnicastTransport = ucB,
+            CustomUserMulticastTransport = userMcB,
+            CustomUserUnicastTransport = userUcB,
         };
 
         using var pA = new DomainParticipant(optionsA);

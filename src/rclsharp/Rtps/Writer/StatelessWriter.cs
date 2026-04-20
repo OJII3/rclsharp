@@ -9,9 +9,8 @@ using Guid = Rclsharp.Common.Guid;
 namespace Rclsharp.Rtps.Writer;
 
 /// <summary>
-/// Stateless RTPS Writer。Reader プロキシ等の状態を持たず、
-/// 単純に DATA submessage を構築して指定 Locator (通常はマルチキャスト) へ送る。
-/// Best-Effort QoS 用。
+/// Stateless RTPS Writer。Best-Effort QoS 用。
+/// マルチキャスト送信に加え、SEDP でマッチした remote reader のユニキャストロケータにも送信する。
 ///
 /// <para>
 /// 各 <see cref="WriteAsync"/> 呼び出しで writerSN を 1 つインクリメントし、
@@ -24,12 +23,16 @@ public sealed class StatelessWriter
     public const int SendBufferSize = 1500;
 
     private readonly IRtpsTransport _transport;
-    private readonly Locator _destination;
+    private readonly IRtpsTransport? _unicastTransport;
+    private readonly Locator _multicastDestination;
     private readonly ProtocolVersion _version;
     private readonly VendorId _vendorId;
     private readonly GuidPrefix _localPrefix;
     private readonly EntityId _writerEntityId;
     private readonly ILogger _logger;
+
+    private readonly object _matchedReadersLock = new();
+    private readonly List<Locator> _matchedReaderLocators = new();
 
     private long _sequenceNumber;
 
@@ -38,38 +41,77 @@ public sealed class StatelessWriter
 
     public StatelessWriter(
         IRtpsTransport transport,
-        Locator destination,
+        Locator multicastDestination,
         ProtocolVersion version,
         VendorId vendorId,
         GuidPrefix localPrefix,
         EntityId writerEntityId,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        IRtpsTransport? unicastTransport = null)
     {
         _transport = transport;
-        _destination = destination;
+        _multicastDestination = multicastDestination;
         _version = version;
         _vendorId = vendorId;
         _localPrefix = localPrefix;
         _writerEntityId = writerEntityId;
         _logger = logger ?? NullLogger.Instance;
+        _unicastTransport = unicastTransport;
         Guid = new Guid(localPrefix, writerEntityId);
     }
 
-    /// <summary>シリアライズ済みペイロード (encap ヘッダ含む) を 1 回送信する。</summary>
+    /// <summary>マッチした remote reader のユニキャストロケータを追加する。</summary>
+    public void AddMatchedReaderLocator(Locator locator)
+    {
+        lock (_matchedReadersLock)
+        {
+            if (!_matchedReaderLocators.Contains(locator))
+            {
+                _matchedReaderLocators.Add(locator);
+                _logger.Debug($"StatelessWriter {_writerEntityId}: added matched reader locator {locator}");
+            }
+        }
+    }
+
+    /// <summary>シリアライズ済みペイロード (encap ヘッダ含む) を送信する。</summary>
     public async ValueTask WriteAsync(
         ReadOnlyMemory<byte> serializedPayload,
         CancellationToken cancellationToken = default)
     {
         long sn = Interlocked.Increment(ref _sequenceNumber);
         var packet = BuildPacket(serializedPayload, sn);
+
+        // マルチキャスト送信
         try
         {
-            await _transport.SendAsync(packet, _destination, cancellationToken).ConfigureAwait(false);
+            await _transport.SendAsync(packet, _multicastDestination, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            _logger.Error("StatelessWriter SendAsync failed", ex);
+            _logger.Error("StatelessWriter multicast SendAsync failed", ex);
+        }
+
+        // マッチした reader のユニキャストロケータにも送信
+        Locator[] locators;
+        lock (_matchedReadersLock)
+        {
+            if (_matchedReaderLocators.Count == 0) return;
+            locators = _matchedReaderLocators.ToArray();
+        }
+
+        var unicastTransport = _unicastTransport ?? _transport;
+        foreach (var locator in locators)
+        {
+            try
+            {
+                await unicastTransport.SendAsync(packet, locator, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger.Error($"StatelessWriter unicast SendAsync to {locator} failed", ex);
+            }
         }
     }
 
