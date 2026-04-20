@@ -61,6 +61,50 @@ public static class DiscoveredEndpointDataSerializer
         pl.WriteInt32((int)data.Durability.Kind);
         pl.EndParameter();
 
+        // DEADLINE (8B Duration = infinite)
+        pl.BeginParameter(ParameterId.Deadline);
+        var deadlineBytes = new byte[Duration.Size];
+        Duration.Infinite.WriteTo(deadlineBytes, littleEndian);
+        pl.WriteRawBytes(deadlineBytes);
+        pl.EndParameter();
+
+        // LATENCY_BUDGET (8B Duration = zero)
+        pl.BeginParameter(ParameterId.LatencyBudget);
+        var latencyBytes = new byte[Duration.Size];
+        Duration.Zero.WriteTo(latencyBytes, littleEndian);
+        pl.WriteRawBytes(latencyBytes);
+        pl.EndParameter();
+
+        // LIVELINESS (4B kind + 8B Duration = 12B, AUTOMATIC + infinite)
+        pl.BeginParameter(ParameterId.Liveliness);
+        pl.WriteInt32(0); // AUTOMATIC = 0
+        var livelinessBytes = new byte[Duration.Size];
+        Duration.Infinite.WriteTo(livelinessBytes, littleEndian);
+        pl.WriteRawBytes(livelinessBytes);
+        pl.EndParameter();
+
+        // OWNERSHIP (4B kind = SHARED)
+        pl.BeginParameter(ParameterId.Ownership);
+        pl.WriteInt32(0); // SHARED = 0
+        pl.EndParameter();
+
+        // DESTINATION_ORDER (4B kind = BY_RECEPTION_TIMESTAMP)
+        pl.BeginParameter(ParameterId.DestinationOrder);
+        pl.WriteInt32(0); // BY_RECEPTION_TIMESTAMP = 0
+        pl.EndParameter();
+
+        // PRESENTATION (4B access_scope + 1B coherent + 1B ordered + 2B pad = 8B)
+        pl.BeginParameter(ParameterId.Presentation);
+        pl.WriteInt32(0); // INSTANCE = 0
+        pl.WriteBool(false); // coherent_access
+        pl.WriteBool(false); // ordered_access
+        pl.EndParameter();
+
+        // PARTITION (sequence<string>: 4B count = 0, empty)
+        pl.BeginParameter(ParameterId.Partition);
+        pl.WriteUInt32(0); // 要素数 0
+        pl.EndParameter();
+
         // UNICAST_LOCATOR (24B each)
         foreach (var loc in data.UnicastLocators)
         {
