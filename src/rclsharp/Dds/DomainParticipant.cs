@@ -260,7 +260,7 @@ public sealed class DomainParticipant : IDisposable
         {
             foreach (var loc in locators)
             {
-                writer.AddMatchedReaderLocator(loc);
+                if (IsUdpLocator(loc)) writer.AddMatchedReaderLocator(loc);
             }
         }
         else
@@ -273,7 +273,7 @@ public sealed class DomainParticipant : IDisposable
                 {
                     foreach (var loc in p.Data.DefaultUnicastLocators)
                     {
-                        writer.AddMatchedReaderLocator(loc);
+                        if (IsUdpLocator(loc)) writer.AddMatchedReaderLocator(loc);
                     }
                     break;
                 }
@@ -282,6 +282,9 @@ public sealed class DomainParticipant : IDisposable
 
         _options.Logger.Debug($"DomainParticipant: matched local writer with remote reader on topic={topicName}");
     }
+
+    private static bool IsUdpLocator(Locator loc)
+        => loc.Kind == LocatorKind.UdpV4 || loc.Kind == LocatorKind.UdpV6;
 
     /// <summary>送受信トランスポートと SPDP の起動。</summary>
     public void Start()
