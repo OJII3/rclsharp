@@ -9,12 +9,6 @@ namespace Rclsharp.Discovery;
 /// SEDP で交換される endpoint (Writer または Reader) の発見データ。
 /// RTPS 仕様 9.6.2.2.4 / 9.6.2.2.5 (DiscoveredWriterData / DiscoveredReaderData)。
 /// 共通フィールドのみを保持し、Writer/Reader の区別は <see cref="Kind"/> で表現する。
-///
-/// <para>
-/// Phase 6 では最低限の PID のみ:
-/// PARTICIPANT_GUID / ENDPOINT_GUID / TOPIC_NAME / TYPE_NAME / RELIABILITY / DURABILITY。
-/// QoS 拡張 (Deadline, Lifespan, ...) は後続フェーズで追加。
-/// </para>
 /// </summary>
 public sealed class DiscoveredEndpointData
 {
@@ -34,4 +28,10 @@ public sealed class DiscoveredEndpointData
 
     public ReliabilityQos Reliability { get; set; } = ReliabilityQos.BestEffort;
     public DurabilityQos Durability { get; set; } = DurabilityQos.Volatile;
+
+    /// <summary>endpoint の unicast ロケータ (PID_UNICAST_LOCATOR)。FastDDS はこれを必要とする。</summary>
+    public List<Locator> UnicastLocators { get; } = new();
+
+    /// <summary>endpoint の multicast ロケータ (PID_MULTICAST_LOCATOR)。</summary>
+    public List<Locator> MulticastLocators { get; } = new();
 }

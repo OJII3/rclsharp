@@ -61,6 +61,26 @@ public static class DiscoveredEndpointDataSerializer
         pl.WriteInt32((int)data.Durability.Kind);
         pl.EndParameter();
 
+        // UNICAST_LOCATOR (24B each)
+        foreach (var loc in data.UnicastLocators)
+        {
+            pl.BeginParameter(ParameterId.UnicastLocator);
+            var locBytes = new byte[Locator.Size];
+            loc.WriteTo(locBytes, littleEndian);
+            pl.WriteRawBytes(locBytes);
+            pl.EndParameter();
+        }
+
+        // MULTICAST_LOCATOR (24B each)
+        foreach (var loc in data.MulticastLocators)
+        {
+            pl.BeginParameter(ParameterId.MulticastLocator);
+            var locBytes = new byte[Locator.Size];
+            loc.WriteTo(locBytes, littleEndian);
+            pl.WriteRawBytes(locBytes);
+            pl.EndParameter();
+        }
+
         pl.WriteSentinel();
         writer = pl.CurrentWriter;
     }
@@ -117,6 +137,24 @@ public static class DiscoveredEndpointDataSerializer
                 case ParameterId.KeyHash:
                     // EndpointGuid と冗長なため明示的に消費 (skip)
                     break;
+                case ParameterId.UnicastLocator:
+                    {
+                        var raw = pl.CurrentValueRaw();
+                        if (raw.Length >= Locator.Size)
+                        {
+                            data.UnicastLocators.Add(Locator.Read(raw[..Locator.Size], littleEndian));
+                        }
+                        break;
+                    }
+                case ParameterId.MulticastLocator:
+                    {
+                        var raw = pl.CurrentValueRaw();
+                        if (raw.Length >= Locator.Size)
+                        {
+                            data.MulticastLocators.Add(Locator.Read(raw[..Locator.Size], littleEndian));
+                        }
+                        break;
+                    }
                 default:
                     // 未知 PID は MoveNext が次へ進める際に自動スキップ
                     break;

@@ -343,6 +343,8 @@ public sealed class DomainParticipant : IDisposable
             Reliability = ReliabilityQos.BestEffort,
             Durability = DurabilityQos.Volatile,
         };
+        endpointData.UnicastLocators.Add(_defaultUnicastLocator);
+        endpointData.MulticastLocators.Add(_defaultMulticastLocator);
         lock (_localEndpointsLock) { _localWriters.Add(endpointData); }
         _ = _sedpPublicationsWriter.AddEndpointAsync(endpointData);
 
@@ -382,6 +384,8 @@ public sealed class DomainParticipant : IDisposable
             Reliability = ReliabilityQos.BestEffort,
             Durability = DurabilityQos.Volatile,
         };
+        endpointData.UnicastLocators.Add(_defaultUnicastLocator);
+        endpointData.MulticastLocators.Add(_defaultMulticastLocator);
         lock (_localEndpointsLock) { _localReaders.Add(endpointData); }
         _ = _sedpSubscriptionsWriter.AddEndpointAsync(endpointData);
 
