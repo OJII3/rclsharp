@@ -23,6 +23,7 @@ public class WireBitExactTests
     private static (CdrEndianness endianness, byte[] payload) ParseFixture(byte[] raw)
     {
         var (kind, _) = CdrEncapsulation.Read(raw);
+        CdrEncapsulation.IsParameterList(kind).Should().BeFalse("Plain CDR fixture expected");
         var endianness = CdrEncapsulation.GetEndianness(kind);
         var payload = raw[CdrEncapsulation.Size..];
         return (endianness, payload);
@@ -40,6 +41,7 @@ public class WireBitExactTests
     {
         var r = new CdrReader(bytes, endian);
         serializer.Deserialize(ref r, out T value);
+        r.Remaining.Should().Be(0, "deserializer must consume all payload bytes");
         return value;
     }
 
