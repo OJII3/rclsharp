@@ -390,7 +390,7 @@ public sealed class DomainParticipant : IDisposable
         var ddsTopic = TopicNameMangler.MangleTopic(topicName);
         var writerEntityId = UserEntityIdAllocator.WriterFor(ddsTopic);
         var writerGuid = new Guid(GuidPrefix, writerEntityId);
-        var history = new Rtps.HistoryCache.WriterHistoryCache(writerGuid);
+        var history = new Rtps.HistoryCache.WriterHistoryCache(writerGuid, maxSamples: 1000);
         var writer = new StatefulWriter(
             sendTransport: _userUnicastTransport,
             multicastDestination: _userMulticastDestination,

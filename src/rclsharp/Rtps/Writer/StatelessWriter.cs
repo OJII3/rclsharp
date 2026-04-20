@@ -10,7 +10,7 @@ namespace Rclsharp.Rtps.Writer;
 
 /// <summary>
 /// Stateless RTPS Writer。Best-Effort QoS 用。
-/// マルチキャスト送信に加え、SEDP でマッチした remote reader のユニキャストロケータにも送信する。
+/// Reader プロキシ等の状態を持たず、単純に DATA submessage を構築して指定 Locator へ送る。
 ///
 /// <para>
 /// 各 <see cref="WriteAsync"/> 呼び出しで writerSN を 1 つインクリメントし、
@@ -19,20 +19,16 @@ namespace Rclsharp.Rtps.Writer;
 /// </summary>
 public sealed class StatelessWriter
 {
-    /// <summary>送信バッファサイズ (1500 = MTU 想定)。Phase 5 ではフラグメンテーション非対応。</summary>
+    /// <summary>送信バッファサイズ (1500 = MTU 想定)。フラグメンテーション非対応。</summary>
     public const int SendBufferSize = 1500;
 
     private readonly IRtpsTransport _transport;
-    private readonly IRtpsTransport? _unicastTransport;
-    private readonly Locator _multicastDestination;
+    private readonly Locator _destination;
     private readonly ProtocolVersion _version;
     private readonly VendorId _vendorId;
     private readonly GuidPrefix _localPrefix;
     private readonly EntityId _writerEntityId;
     private readonly ILogger _logger;
-
-    private readonly object _matchedReadersLock = new();
-    private readonly List<Locator> _matchedReaderLocators = new();
 
     private long _sequenceNumber;
 
@@ -41,77 +37,38 @@ public sealed class StatelessWriter
 
     public StatelessWriter(
         IRtpsTransport transport,
-        Locator multicastDestination,
+        Locator destination,
         ProtocolVersion version,
         VendorId vendorId,
         GuidPrefix localPrefix,
         EntityId writerEntityId,
-        ILogger? logger = null,
-        IRtpsTransport? unicastTransport = null)
+        ILogger? logger = null)
     {
         _transport = transport;
-        _multicastDestination = multicastDestination;
+        _destination = destination;
         _version = version;
         _vendorId = vendorId;
         _localPrefix = localPrefix;
         _writerEntityId = writerEntityId;
         _logger = logger ?? NullLogger.Instance;
-        _unicastTransport = unicastTransport;
         Guid = new Guid(localPrefix, writerEntityId);
     }
 
-    /// <summary>マッチした remote reader のユニキャストロケータを追加する。</summary>
-    public void AddMatchedReaderLocator(Locator locator)
-    {
-        lock (_matchedReadersLock)
-        {
-            if (!_matchedReaderLocators.Contains(locator))
-            {
-                _matchedReaderLocators.Add(locator);
-                _logger.Debug($"StatelessWriter {_writerEntityId}: added matched reader locator {locator}");
-            }
-        }
-    }
-
-    /// <summary>シリアライズ済みペイロード (encap ヘッダ含む) を送信する。</summary>
+    /// <summary>シリアライズ済みペイロード (encap ヘッダ含む) を 1 回送信する。</summary>
     public async ValueTask WriteAsync(
         ReadOnlyMemory<byte> serializedPayload,
         CancellationToken cancellationToken = default)
     {
         long sn = Interlocked.Increment(ref _sequenceNumber);
         var packet = BuildPacket(serializedPayload, sn);
-
-        // マルチキャスト送信
         try
         {
-            await _transport.SendAsync(packet, _multicastDestination, cancellationToken).ConfigureAwait(false);
+            await _transport.SendAsync(packet, _destination, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            _logger.Error("StatelessWriter multicast SendAsync failed", ex);
-        }
-
-        // マッチした reader のユニキャストロケータにも送信
-        Locator[] locators;
-        lock (_matchedReadersLock)
-        {
-            if (_matchedReaderLocators.Count == 0) return;
-            locators = _matchedReaderLocators.ToArray();
-        }
-
-        var unicastTransport = _unicastTransport ?? _transport;
-        foreach (var locator in locators)
-        {
-            try
-            {
-                await unicastTransport.SendAsync(packet, locator, cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                _logger.Error($"StatelessWriter unicast SendAsync to {locator} failed", ex);
-            }
+            _logger.Error("StatelessWriter SendAsync failed", ex);
         }
     }
 

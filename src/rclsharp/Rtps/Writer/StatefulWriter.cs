@@ -143,6 +143,7 @@ public sealed class StatefulWriter : IDisposable
     /// </summary>
     public void OnPacketReceived(ReadOnlyMemory<byte> packet, Locator source)
     {
+        if (_disposed) return;
         try { ProcessPacket(packet.Span); }
         catch (Exception ex) { _logger.Warn($"StatefulWriter failed to parse packet from {source}", ex); }
     }
@@ -165,8 +166,31 @@ public sealed class StatefulWriter : IDisposable
 
             proxy.ProcessAckNack(ack.ReaderSnState);
 
+            // ack 済みサンプルを history から削除 (全 reader の最小 ack を基準)
+            PurgeAckedSamples();
+
             // 再送
             _ = ResendRequestedAsync(proxy, CancellationToken.None);
+        }
+    }
+
+    /// <summary>全 matched reader がack 済みのサンプルを history から削除する。</summary>
+    private void PurgeAckedSamples()
+    {
+        long minAcked;
+        lock (_matchedLock)
+        {
+            if (_matched.Count == 0) return;
+            minAcked = long.MaxValue;
+            foreach (var proxy in _matched.Values)
+            {
+                var acked = proxy.HighestAcked.Value;
+                if (acked < minAcked) minAcked = acked;
+            }
+        }
+        if (minAcked > 0 && minAcked < long.MaxValue)
+        {
+            _history.RemoveBelowOrEqual(new SequenceNumber(minAcked));
         }
     }
 
