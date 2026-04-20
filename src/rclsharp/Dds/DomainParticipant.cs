@@ -23,9 +23,11 @@ public sealed class DomainParticipant : IDisposable
     private readonly IRtpsTransport _multicastTransport;
     private readonly IRtpsTransport _unicastTransport;
     private readonly IRtpsTransport _userMulticastTransport;
+    private readonly IRtpsTransport _userUnicastTransport;
     private readonly bool _ownsMulticastTransport;
     private readonly bool _ownsUnicastTransport;
     private readonly bool _ownsUserMulticastTransport;
+    private readonly bool _ownsUserUnicastTransport;
     private readonly DiscoveryDb _discoveryDb;
     private readonly SpdpBuiltinParticipantReader _spdpReader;
     private readonly SpdpBuiltinParticipantWriter _spdpWriter;
@@ -38,6 +40,7 @@ public sealed class DomainParticipant : IDisposable
     private readonly Locator _metatrafficUnicastLocator;
     private readonly Locator _metatrafficMulticastLocator;
     private readonly Locator _defaultMulticastLocator;
+    private readonly Locator _defaultUnicastLocator;
 
     // ローカル endpoint 一覧 (SEDP 送信時に使用)
     private readonly object _localEndpointsLock = new();
@@ -55,6 +58,9 @@ public sealed class DomainParticipant : IDisposable
     /// <summary>ユーザートピックの multicast 送受信に使うトランスポート (Phase 5)。</summary>
     public IRtpsTransport UserMulticastTransport => _userMulticastTransport;
 
+    /// <summary>ユーザートピックの unicast 送受信に使うトランスポート。</summary>
+    public IRtpsTransport UserUnicastTransport => _userUnicastTransport;
+
     /// <summary>ユーザートピックの multicast 送信先 Locator (Phase 5)。</summary>
     public Locator UserMulticastDestination => _userMulticastDestination;
 
@@ -69,6 +75,7 @@ public sealed class DomainParticipant : IDisposable
         int discoveryMulticastPort = RtpsPorts.DiscoveryMulticast(_options.DomainId);
         int discoveryUnicastPort = RtpsPorts.DiscoveryUnicast(_options.DomainId, _options.ParticipantId);
         int userMulticastPort = RtpsPorts.UserMulticast(_options.DomainId);
+        int userUnicastPort = RtpsPorts.UserUnicast(_options.DomainId, _options.ParticipantId);
 
         // Multicast transport (受信用に bind、送信先 Locator も同じ)
         if (_options.CustomMulticastTransport is not null)
@@ -118,11 +125,28 @@ public sealed class DomainParticipant : IDisposable
             _ownsUserMulticastTransport = true;
         }
 
+        // ユーザートピック用 Unicast transport (port = 7411 + 250*domain + 2*participant)
+        if (_options.CustomUserUnicastTransport is not null)
+        {
+            _userUnicastTransport = _options.CustomUserUnicastTransport;
+            _ownsUserUnicastTransport = false;
+        }
+        else
+        {
+            var localAddr = _options.LocalUnicastAddress ?? IPAddress.Loopback;
+            _userUnicastTransport = UdpTransport.CreateUnicast(
+                localAddr,
+                userUnicastPort,
+                _options.Logger);
+            _ownsUserUnicastTransport = true;
+        }
+
         _multicastDestination = Locator.FromUdpV4(_options.MulticastGroup, (uint)discoveryMulticastPort);
         _userMulticastDestination = Locator.FromUdpV4(_options.MulticastGroup, (uint)userMulticastPort);
         _metatrafficMulticastLocator = _multicastDestination;
         _metatrafficUnicastLocator = _unicastTransport.LocalLocator;
         _defaultMulticastLocator = _userMulticastDestination;
+        _defaultUnicastLocator = _userUnicastTransport.LocalLocator;
 
         _discoveryDb = new DiscoveryDb();
 
@@ -224,6 +248,7 @@ public sealed class DomainParticipant : IDisposable
         _multicastTransport.Start();
         _unicastTransport.Start();
         _userMulticastTransport.Start();
+        _userUnicastTransport.Start();
         _spdpReader.Start();
         _spdpWriter.Start();
 
@@ -258,6 +283,7 @@ public sealed class DomainParticipant : IDisposable
         _unicastTransport.Received -= _sedpSubscriptionsWriter.OnPacketReceived;
         _spdpWriter.Stop();
         _spdpReader.Stop();
+        _userUnicastTransport.Stop();
         _userMulticastTransport.Stop();
         _multicastTransport.Stop();
         _unicastTransport.Stop();
@@ -278,6 +304,7 @@ public sealed class DomainParticipant : IDisposable
         };
         data.MetatrafficMulticastLocators.Add(_metatrafficMulticastLocator);
         data.MetatrafficUnicastLocators.Add(_metatrafficUnicastLocator);
+        data.DefaultUnicastLocators.Add(_defaultUnicastLocator);
         data.DefaultMulticastLocators.Add(_defaultMulticastLocator);
         return data;
     }
@@ -382,6 +409,10 @@ public sealed class DomainParticipant : IDisposable
         _sedpSubscriptionsReader.Dispose();
         _spdpWriter.Dispose();
         _spdpReader.Dispose();
+        if (_ownsUserUnicastTransport)
+        {
+            _userUnicastTransport.Dispose();
+        }
         if (_ownsUserMulticastTransport)
         {
             _userMulticastTransport.Dispose();
