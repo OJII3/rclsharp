@@ -47,8 +47,8 @@ public sealed class DomainParticipant : IDisposable
     private readonly List<DiscoveredEndpointData> _localWriters = new();
     private readonly List<DiscoveredEndpointData> _localReaders = new();
 
-    // ローカル StatelessWriter をトピック名でルックアップ (remote reader マッチング用)
-    private readonly Dictionary<string, StatelessWriter> _localStatelessWriters = new();
+    // ローカル StatefulWriter をトピック名でルックアップ (remote reader マッチング用)
+    private readonly Dictionary<string, StatefulWriter> _localUserWriters = new();
 
     private bool _started;
     private bool _disposed;
@@ -246,24 +246,17 @@ public sealed class DomainParticipant : IDisposable
     private void OnRemoteReaderDiscovered(RemoteEndpoint remoteReader)
     {
         var topicName = remoteReader.TopicName;
-        StatelessWriter? writer;
+        StatefulWriter? writer;
         lock (_localEndpointsLock)
         {
-            _localStatelessWriters.TryGetValue(topicName, out writer);
+            _localUserWriters.TryGetValue(topicName, out writer);
         }
         if (writer is null) return;
 
-        // remote reader のユニキャストロケータ (SEDP endpoint data から取得)
-        // endpoint data にロケータがあればそれを使い、なければ participant の default unicast を使う
-        var locators = remoteReader.Data.UnicastLocators;
-        if (locators.Count > 0)
-        {
-            foreach (var loc in locators)
-            {
-                if (IsUdpLocator(loc)) writer.AddMatchedReaderLocator(loc);
-            }
-        }
-        else
+        // remote reader のユニキャストロケータを解決
+        Locator? unicastLocator = FirstUdpLocator(remoteReader.Data.UnicastLocators);
+
+        if (unicastLocator is null)
         {
             // endpoint にロケータがない場合は participant の DEFAULT_UNICAST_LOCATOR にフォールバック
             var participants = _discoveryDb.Snapshot();
@@ -271,20 +264,41 @@ public sealed class DomainParticipant : IDisposable
             {
                 if (p.GuidPrefix.Equals(remoteReader.Data.EndpointGuid.Prefix))
                 {
-                    foreach (var loc in p.Data.DefaultUnicastLocators)
-                    {
-                        if (IsUdpLocator(loc)) writer.AddMatchedReaderLocator(loc);
-                    }
+                    unicastLocator = FirstUdpLocator(p.Data.DefaultUnicastLocators);
                     break;
                 }
             }
         }
 
-        _options.Logger.Debug($"DomainParticipant: matched local writer with remote reader on topic={topicName}");
+        writer.MatchReader(remoteReader.Data.EndpointGuid, unicastLocator);
+        _options.Logger.Debug($"DomainParticipant: matched local writer with remote reader on topic={topicName} reader={remoteReader.Data.EndpointGuid}");
+    }
+
+    private void OnUserUnicastPacketReceived(ReadOnlyMemory<byte> packet, Locator source)
+    {
+        // 全ローカル user writer に ACKNACK を渡す (entity ID で内部フィルタされる)
+        StatefulWriter[] writers;
+        lock (_localEndpointsLock)
+        {
+            writers = _localUserWriters.Values.ToArray();
+        }
+        foreach (var w in writers)
+        {
+            w.OnPacketReceived(packet, source);
+        }
     }
 
     private static bool IsUdpLocator(Locator loc)
         => loc.Kind == LocatorKind.UdpV4 || loc.Kind == LocatorKind.UdpV6;
+
+    private static Locator? FirstUdpLocator(IEnumerable<Locator> locators)
+    {
+        foreach (var loc in locators)
+        {
+            if (IsUdpLocator(loc)) return loc;
+        }
+        return null;
+    }
 
     /// <summary>送受信トランスポートと SPDP の起動。</summary>
     public void Start()
@@ -310,6 +324,9 @@ public sealed class DomainParticipant : IDisposable
         _unicastTransport.Received += _sedpPublicationsWriter.OnPacketReceived;
         _unicastTransport.Received += _sedpSubscriptionsWriter.OnPacketReceived;
 
+        // ユーザーデータ writer の ACKNACK をユニキャストで受け取る
+        _userUnicastTransport.Received += OnUserUnicastPacketReceived;
+
         _sedpPublicationsWriter.Start();
         _sedpSubscriptionsWriter.Start();
         _started = true;
@@ -324,6 +341,7 @@ public sealed class DomainParticipant : IDisposable
         }
         _sedpPublicationsWriter.Stop();
         _sedpSubscriptionsWriter.Stop();
+        _userUnicastTransport.Received -= OnUserUnicastPacketReceived;
         _multicastTransport.Received -= _sedpPublicationsReader.OnPacketReceived;
         _multicastTransport.Received -= _sedpSubscriptionsReader.OnPacketReceived;
         _unicastTransport.Received -= _sedpPublicationsReader.OnPacketReceived;
@@ -371,26 +389,28 @@ public sealed class DomainParticipant : IDisposable
 
         var ddsTopic = TopicNameMangler.MangleTopic(topicName);
         var writerEntityId = UserEntityIdAllocator.WriterFor(ddsTopic);
-        var writer = new StatelessWriter(
-            _userMulticastTransport,
-            _userMulticastDestination,
-            _options.ProtocolVersion,
-            _options.VendorId,
-            GuidPrefix,
-            writerEntityId,
-            _options.Logger,
-            unicastTransport: _userUnicastTransport);
+        var writerGuid = new Guid(GuidPrefix, writerEntityId);
+        var history = new Rtps.HistoryCache.WriterHistoryCache(writerGuid);
+        var writer = new StatefulWriter(
+            sendTransport: _userUnicastTransport,
+            multicastDestination: _userMulticastDestination,
+            version: _options.ProtocolVersion,
+            vendorId: _options.VendorId,
+            localPrefix: GuidPrefix,
+            writerEntityId: writerEntityId,
+            heartbeatPeriod: TimeSpan.FromSeconds(1),
+            history: history,
+            logger: _options.Logger);
 
         // SEDP 用に登録 (即時 publish)
-        var endpointGuid = new Guid(GuidPrefix, writerEntityId);
         var endpointData = new DiscoveredEndpointData
         {
             Kind = EndpointKind.Writer,
-            EndpointGuid = endpointGuid,
+            EndpointGuid = writerGuid,
             ParticipantGuid = Guid,
             TopicName = ddsTopic,
             TypeName = typeName ?? "",
-            Reliability = ReliabilityQos.BestEffort,
+            Reliability = ReliabilityQos.Reliable,
             Durability = DurabilityQos.Volatile,
         };
         endpointData.UnicastLocators.Add(_defaultUnicastLocator);
@@ -398,11 +418,13 @@ public sealed class DomainParticipant : IDisposable
         lock (_localEndpointsLock)
         {
             _localWriters.Add(endpointData);
-            _localStatelessWriters[ddsTopic] = writer;
+            _localUserWriters[ddsTopic] = writer;
         }
         _ = _sedpPublicationsWriter.AddEndpointAsync(endpointData);
 
-        return new Publisher<T>(topicName, writer, serializer);
+        var pub = new Publisher<T>(topicName, writer, serializer);
+        pub.Start();
+        return pub;
     }
 
     /// <summary>

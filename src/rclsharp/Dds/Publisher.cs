@@ -1,4 +1,5 @@
 using Rclsharp.Cdr;
+using Rclsharp.Common;
 using Rclsharp.Rtps.Writer;
 
 using Guid = Rclsharp.Common.Guid;
@@ -7,18 +8,19 @@ namespace Rclsharp.Dds;
 
 /// <summary>
 /// 型付き Publisher。<see cref="ICdrSerializer{T}"/> でシリアライズして
-/// <see cref="StatelessWriter"/> 経由で multicast に送信する。Best-Effort 専用 (Phase 5)。
+/// <see cref="StatefulWriter"/> 経由で RELIABLE 配信する。
 /// </summary>
 public sealed class Publisher<T> : IDisposable
 {
-    private readonly StatelessWriter _writer;
+    private readonly StatefulWriter _writer;
     private readonly ICdrSerializer<T> _serializer;
     private bool _disposed;
 
     public string TopicName { get; }
     public Guid Guid => _writer.Guid;
+    internal StatefulWriter Writer => _writer;
 
-    public Publisher(string topicName, StatelessWriter writer, ICdrSerializer<T> serializer)
+    public Publisher(string topicName, StatefulWriter writer, ICdrSerializer<T> serializer)
     {
         TopicName = topicName;
         _writer = writer;
@@ -36,7 +38,6 @@ public sealed class Publisher<T> : IDisposable
     /// <summary>シリアライズ後のバイト列 (encap header 込み) を返す (テスト/デバッグ用)。</summary>
     public ReadOnlyMemory<byte> SerializeWithEncapsulation(T value)
     {
-        // 概算サイズに余裕を加える (alignment/string padding 用)
         int sizeEstimate = _serializer.GetSerializedSize(value);
         int totalCapacity = CdrEncapsulation.Size + sizeEstimate + 16;
         var buffer = new byte[totalCapacity];
@@ -49,13 +50,14 @@ public sealed class Publisher<T> : IDisposable
         return payload;
     }
 
+    public void Start() => _writer.Start();
+    public void Stop() => _writer.Stop();
+
     public void Dispose()
     {
-        if (_disposed)
-        {
-            return;
-        }
+        if (_disposed) return;
         _disposed = true;
+        _writer.Dispose();
     }
 
     private void ThrowIfDisposed()
