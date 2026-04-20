@@ -26,4 +26,8 @@
     <ProjectReference Include="..\..\src\rclsharp\rclsharp.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="Integration\Fixtures\*.bin" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
