@@ -9,9 +9,8 @@ using Guid = Rclsharp.Common.Guid;
 namespace Rclsharp.Rtps.Writer;
 
 /// <summary>
-/// Stateless RTPS Writer。Reader プロキシ等の状態を持たず、
-/// 単純に DATA submessage を構築して指定 Locator (通常はマルチキャスト) へ送る。
-/// Best-Effort QoS 用。
+/// Stateless RTPS Writer。Best-Effort QoS 用。
+/// Reader プロキシ等の状態を持たず、単純に DATA submessage を構築して指定 Locator へ送る。
 ///
 /// <para>
 /// 各 <see cref="WriteAsync"/> 呼び出しで writerSN を 1 つインクリメントし、
@@ -20,7 +19,7 @@ namespace Rclsharp.Rtps.Writer;
 /// </summary>
 public sealed class StatelessWriter
 {
-    /// <summary>送信バッファサイズ (1500 = MTU 想定)。Phase 5 ではフラグメンテーション非対応。</summary>
+    /// <summary>送信バッファサイズ (1500 = MTU 想定)。フラグメンテーション非対応。</summary>
     public const int SendBufferSize = 1500;
 
     private readonly IRtpsTransport _transport;

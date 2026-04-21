@@ -31,6 +31,8 @@ public class SedpLoopbackTests
         var ucB = hub.Create(Locator.FromUdpV4(IPAddress.Parse("10.0.0.2"), 7413u));
         var userMcA = hub.Create(userMcLoc);
         var userMcB = hub.Create(userMcLoc);
+        var userUcA = hub.Create(Locator.FromUdpV4(IPAddress.Parse("10.0.0.1"), 7412u));
+        var userUcB = hub.Create(Locator.FromUdpV4(IPAddress.Parse("10.0.0.2"), 7414u));
 
         var optionsA = new DomainParticipantOptions
         {
@@ -41,6 +43,7 @@ public class SedpLoopbackTests
             CustomMulticastTransport = spdpA,
             CustomUnicastTransport = ucA,
             CustomUserMulticastTransport = userMcA,
+            CustomUserUnicastTransport = userUcA,
         };
         var optionsB = new DomainParticipantOptions
         {
@@ -51,6 +54,7 @@ public class SedpLoopbackTests
             CustomMulticastTransport = spdpB,
             CustomUnicastTransport = ucB,
             CustomUserMulticastTransport = userMcB,
+            CustomUserUnicastTransport = userUcB,
         };
 
         return new TestEnv
