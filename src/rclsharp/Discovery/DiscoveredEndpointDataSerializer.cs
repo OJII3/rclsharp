@@ -61,48 +61,51 @@ public static class DiscoveredEndpointDataSerializer
         pl.WriteInt32((int)data.Durability.Kind);
         pl.EndParameter();
 
-        // DEADLINE (8B Duration = infinite)
+        // DEADLINE (8B Duration)
         pl.BeginParameter(ParameterId.Deadline);
         var deadlineBytes = new byte[Duration.Size];
-        Duration.Infinite.WriteTo(deadlineBytes, littleEndian);
+        data.Deadline.Period.WriteTo(deadlineBytes, littleEndian);
         pl.WriteRawBytes(deadlineBytes);
         pl.EndParameter();
 
-        // LATENCY_BUDGET (8B Duration = zero)
+        // LATENCY_BUDGET (8B Duration)
         pl.BeginParameter(ParameterId.LatencyBudget);
         var latencyBytes = new byte[Duration.Size];
-        Duration.Zero.WriteTo(latencyBytes, littleEndian);
+        data.LatencyBudget.Duration.WriteTo(latencyBytes, littleEndian);
         pl.WriteRawBytes(latencyBytes);
         pl.EndParameter();
 
-        // LIVELINESS (4B kind + 8B Duration = 12B, AUTOMATIC + infinite)
+        // LIVELINESS (4B kind + 8B Duration = 12B)
         pl.BeginParameter(ParameterId.Liveliness);
-        pl.WriteInt32(0); // AUTOMATIC = 0
+        pl.WriteInt32((int)data.Liveliness.Kind);
         var livelinessBytes = new byte[Duration.Size];
-        Duration.Infinite.WriteTo(livelinessBytes, littleEndian);
+        data.Liveliness.LeaseDuration.WriteTo(livelinessBytes, littleEndian);
         pl.WriteRawBytes(livelinessBytes);
         pl.EndParameter();
 
-        // OWNERSHIP (4B kind = SHARED)
+        // OWNERSHIP (4B kind)
         pl.BeginParameter(ParameterId.Ownership);
-        pl.WriteInt32(0); // SHARED = 0
+        pl.WriteInt32((int)data.Ownership.Kind);
         pl.EndParameter();
 
-        // DESTINATION_ORDER (4B kind = BY_RECEPTION_TIMESTAMP)
+        // DESTINATION_ORDER (4B kind)
         pl.BeginParameter(ParameterId.DestinationOrder);
-        pl.WriteInt32(0); // BY_RECEPTION_TIMESTAMP = 0
+        pl.WriteInt32((int)data.DestinationOrder.Kind);
         pl.EndParameter();
 
         // PRESENTATION (4B access_scope + 1B coherent + 1B ordered + 2B pad = 8B)
         pl.BeginParameter(ParameterId.Presentation);
-        pl.WriteInt32(0); // INSTANCE = 0
-        pl.WriteBool(false); // coherent_access
-        pl.WriteBool(false); // ordered_access
+        pl.WriteInt32((int)data.Presentation.AccessScope);
+        pl.WriteBool(data.Presentation.CoherentAccess);
+        pl.WriteBool(data.Presentation.OrderedAccess);
         pl.EndParameter();
 
-        // PARTITION (sequence<string>: 4B count = 0, empty)
+        // PARTITION (sequence<string>)
         pl.BeginParameter(ParameterId.Partition);
-        pl.WriteUInt32(0); // 要素数 0
+        var partitionNames = data.Partition.Names;
+        pl.WriteUInt32((uint)partitionNames.Length);
+        foreach (var name in partitionNames)
+            pl.WriteString(name);
         pl.EndParameter();
 
         // UNICAST_LOCATOR (24B each)
@@ -178,6 +181,53 @@ public static class DiscoveredEndpointDataSerializer
                 case ParameterId.Durability:
                     data.Durability = new DurabilityQos((DurabilityKind)pl.ReadInt32());
                     break;
+                case ParameterId.Deadline:
+                    {
+                        var raw = pl.CurrentValueRaw();
+                        if (raw.Length >= Duration.Size)
+                            data.Deadline = new DeadlineQos(Duration.Read(raw[..Duration.Size], littleEndian));
+                        break;
+                    }
+                case ParameterId.LatencyBudget:
+                    {
+                        var raw = pl.CurrentValueRaw();
+                        if (raw.Length >= Duration.Size)
+                            data.LatencyBudget = new LatencyBudgetQos(Duration.Read(raw[..Duration.Size], littleEndian));
+                        break;
+                    }
+                case ParameterId.Liveliness:
+                    {
+                        var lkind = (LivelinessKind)pl.ReadInt32();
+                        var raw = pl.CurrentValueRaw();
+                        var lease = raw.Length >= 12
+                            ? Duration.Read(raw.Slice(4, 8), littleEndian)
+                            : Duration.Infinite;
+                        data.Liveliness = new LivelinessQos(lkind, lease);
+                        break;
+                    }
+                case ParameterId.Ownership:
+                    data.Ownership = new OwnershipQos((OwnershipKind)pl.ReadInt32());
+                    break;
+                case ParameterId.DestinationOrder:
+                    data.DestinationOrder = new DestinationOrderQos((DestinationOrderKind)pl.ReadInt32());
+                    break;
+                case ParameterId.Presentation:
+                    {
+                        var scope = (PresentationAccessScope)pl.ReadInt32();
+                        var coherent = pl.ReadBool();
+                        var ordered = pl.ReadBool();
+                        data.Presentation = new PresentationQos(scope, coherent, ordered);
+                        break;
+                    }
+                case ParameterId.Partition:
+                    {
+                        var count = pl.ReadUInt32();
+                        var names = new string[count];
+                        for (uint i = 0; i < count; i++)
+                            names[i] = pl.ReadString();
+                        data.Partition = new PartitionQos(names);
+                        break;
+                    }
                 case ParameterId.KeyHash:
                     // EndpointGuid と冗長なため明示的に消費 (skip)
                     break;
