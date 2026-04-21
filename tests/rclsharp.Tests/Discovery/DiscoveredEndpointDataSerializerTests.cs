@@ -44,6 +44,13 @@ public class DiscoveredEndpointDataSerializerTests
         read.TypeName.Should().Be(src.TypeName);
         read.Reliability.Should().Be(src.Reliability);
         read.Durability.Should().Be(src.Durability);
+        read.Deadline.Should().Be(src.Deadline);
+        read.LatencyBudget.Should().Be(src.LatencyBudget);
+        read.Liveliness.Should().Be(src.Liveliness);
+        read.Ownership.Should().Be(src.Ownership);
+        read.DestinationOrder.Should().Be(src.DestinationOrder);
+        read.Presentation.Should().Be(src.Presentation);
+        read.Partition.Should().Be(src.Partition);
     }
 
     [Fact]
@@ -64,6 +71,39 @@ public class DiscoveredEndpointDataSerializerTests
         read.Reliability.Kind.Should().Be(ReliabilityKind.Reliable);
         read.Reliability.MaxBlockingTime.ToTimeSpan().TotalMilliseconds.Should().BeApproximately(500, 1);
         read.Durability.Kind.Should().Be(DurabilityKind.TransientLocal);
+    }
+
+    [Fact]
+    public void 非デフォルト_QoS_の往復()
+    {
+        var src = MakeWriter();
+        src.Deadline = new DeadlineQos(Duration.FromTimeSpan(TimeSpan.FromSeconds(5)));
+        src.LatencyBudget = new LatencyBudgetQos(Duration.FromTimeSpan(TimeSpan.FromMilliseconds(50)));
+        src.Liveliness = new LivelinessQos(LivelinessKind.ManualByTopic, Duration.FromTimeSpan(TimeSpan.FromSeconds(10)));
+        src.Ownership = new OwnershipQos(OwnershipKind.Exclusive);
+        src.DestinationOrder = new DestinationOrderQos(DestinationOrderKind.BySourceTimestamp);
+        src.Presentation = new PresentationQos(PresentationAccessScope.Topic, true, true);
+        src.Partition = new PartitionQos("partition_a", "partition_b");
+
+        var buf = new byte[2048];
+        var w = new CdrWriter(buf, CdrEndianness.LittleEndian);
+        DiscoveredEndpointDataSerializer.Write(ref w, src);
+
+        var r = new CdrReader(buf.AsSpan(0, w.Position), CdrEndianness.LittleEndian);
+        var read = DiscoveredEndpointDataSerializer.Read(ref r, EndpointKind.Writer);
+
+        read.Deadline.Period.ToTimeSpan().TotalSeconds.Should().BeApproximately(5, 0.01);
+        read.LatencyBudget.Duration.ToTimeSpan().TotalMilliseconds.Should().BeApproximately(50, 1);
+        read.Liveliness.Kind.Should().Be(LivelinessKind.ManualByTopic);
+        read.Liveliness.LeaseDuration.ToTimeSpan().TotalSeconds.Should().BeApproximately(10, 0.01);
+        read.Ownership.Kind.Should().Be(OwnershipKind.Exclusive);
+        read.DestinationOrder.Kind.Should().Be(DestinationOrderKind.BySourceTimestamp);
+        read.Presentation.AccessScope.Should().Be(PresentationAccessScope.Topic);
+        read.Presentation.CoherentAccess.Should().BeTrue();
+        read.Presentation.OrderedAccess.Should().BeTrue();
+        read.Partition.Names.Count.Should().Be(2);
+        read.Partition.Names[0].Should().Be("partition_a");
+        read.Partition.Names[1].Should().Be("partition_b");
     }
 
     [Fact]

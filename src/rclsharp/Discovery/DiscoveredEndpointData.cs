@@ -28,6 +28,13 @@ public sealed class DiscoveredEndpointData
 
     public ReliabilityQos Reliability { get; set; } = ReliabilityQos.BestEffort;
     public DurabilityQos Durability { get; set; } = DurabilityQos.Volatile;
+    public DeadlineQos Deadline { get; set; } = DeadlineQos.Default;
+    public LatencyBudgetQos LatencyBudget { get; set; } = LatencyBudgetQos.Default;
+    public LivelinessQos Liveliness { get; set; } = LivelinessQos.Default;
+    public OwnershipQos Ownership { get; set; } = OwnershipQos.Default;
+    public DestinationOrderQos DestinationOrder { get; set; } = DestinationOrderQos.Default;
+    public PresentationQos Presentation { get; set; } = PresentationQos.Default;
+    public PartitionQos Partition { get; set; } = PartitionQos.Default;
 
     /// <summary>endpoint の unicast ロケータ (PID_UNICAST_LOCATOR)。FastDDS はこれを必要とする。</summary>
     public List<Locator> UnicastLocators { get; } = new();
