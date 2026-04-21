@@ -103,7 +103,7 @@ public static class DiscoveredEndpointDataSerializer
         // PARTITION (sequence<string>)
         pl.BeginParameter(ParameterId.Partition);
         var partitionNames = data.Partition.Names;
-        pl.WriteUInt32((uint)partitionNames.Length);
+        pl.WriteUInt32((uint)partitionNames.Count);
         foreach (var name in partitionNames)
             pl.WriteString(name);
         pl.EndParameter();
@@ -222,6 +222,7 @@ public static class DiscoveredEndpointDataSerializer
                 case ParameterId.Partition:
                     {
                         var count = pl.ReadUInt32();
+                        if (count > 256) break; // 不正パケットによる OOM 防止
                         var names = new string[count];
                         for (uint i = 0; i < count; i++)
                             names[i] = pl.ReadString();

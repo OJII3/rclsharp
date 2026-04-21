@@ -101,7 +101,7 @@ public class DiscoveredEndpointDataSerializerTests
         read.Presentation.AccessScope.Should().Be(PresentationAccessScope.Topic);
         read.Presentation.CoherentAccess.Should().BeTrue();
         read.Presentation.OrderedAccess.Should().BeTrue();
-        read.Partition.Names.Length.Should().Be(2);
+        read.Partition.Names.Count.Should().Be(2);
         read.Partition.Names[0].Should().Be("partition_a");
         read.Partition.Names[1].Should().Be("partition_b");
     }

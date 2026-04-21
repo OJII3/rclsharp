@@ -7,7 +7,7 @@ public readonly struct PartitionQos : IEquatable<PartitionQos>
 {
     private readonly string[]? _names;
 
-    public ReadOnlySpan<string> Names => _names ?? ReadOnlySpan<string>.Empty;
+    public IReadOnlyList<string> Names => _names ?? Array.Empty<string>();
 
     public PartitionQos(params string[] names)
     {
