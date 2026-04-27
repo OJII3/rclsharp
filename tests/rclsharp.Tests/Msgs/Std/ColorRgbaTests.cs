@@ -6,7 +6,7 @@ namespace Rclsharp.Tests.Msgs.Std;
 /// <summary>
 /// std_msgs/ColorRGBA の CDR シリアライズテスト。
 /// </summary>
-public class ColorRgbaMessageTests
+public class ColorRgbaTests
 {
     private static byte[] Serialize<T>(ICdrSerializer<T> serializer, in T value, CdrEndianness endian)
     {
@@ -27,8 +27,8 @@ public class ColorRgbaMessageTests
     public void ColorRGBA_LE_bit_exact()
     {
         // r=1.0, g=0.0, b=0.0, a=1.0 — 1.0f = 0x3F800000 (IEEE 754)
-        var c = new ColorRgbaMessage(1.0f, 0.0f, 0.0f, 1.0f);
-        Serialize(ColorRgbaMessageSerializer.Instance, in c, CdrEndianness.LittleEndian)
+        var c = new ColorRgba(1.0f, 0.0f, 0.0f, 1.0f);
+        Serialize(ColorRgbaSerializer.Instance, in c, CdrEndianness.LittleEndian)
             .Should().Equal(
                 0x00, 0x00, 0x80, 0x3F,
                 0x00, 0x00, 0x00, 0x00,
@@ -41,9 +41,9 @@ public class ColorRgbaMessageTests
     [InlineData(CdrEndianness.BigEndian)]
     public void ColorRGBA_roundtrip(CdrEndianness endian)
     {
-        var c = new ColorRgbaMessage(0.25f, 0.5f, 0.75f, 1.0f);
-        var bytes = Serialize(ColorRgbaMessageSerializer.Instance, in c, endian);
-        var read = Deserialize(ColorRgbaMessageSerializer.Instance, bytes, endian);
+        var c = new ColorRgba(0.25f, 0.5f, 0.75f, 1.0f);
+        var bytes = Serialize(ColorRgbaSerializer.Instance, in c, endian);
+        var read = Deserialize(ColorRgbaSerializer.Instance, bytes, endian);
         read.R.Should().Be(0.25f);
         read.G.Should().Be(0.5f);
         read.B.Should().Be(0.75f);
@@ -53,7 +53,7 @@ public class ColorRgbaMessageTests
     [Fact]
     public void ColorRGBA_サイズは16バイト()
     {
-        ColorRgbaMessageSerializer.Instance.GetSerializedSize(new ColorRgbaMessage(0, 0, 0, 0))
+        ColorRgbaSerializer.Instance.GetSerializedSize(new ColorRgba(0, 0, 0, 0))
             .Should().Be(16);
     }
 }

@@ -96,28 +96,28 @@ public class WireBitExactTests
     // ── std_msgs/Header ──
 
     [Fact]
-    public void HeaderMessage_はROS2出力と一致する()
+    public void Header_はROS2出力と一致する()
     {
         var (endianness, expected) = ParseFixture(LoadFixture("std_msgs_Header.bin"));
-        var msg = new HeaderMessage(new Time(1234567890, 123456789u), "map");
-        var actual = Serialize(HeaderMessageSerializer.Instance, in msg, endianness);
+        var msg = new Header(new Time(1234567890, 123456789u), "map");
+        var actual = Serialize(HeaderSerializer.Instance, in msg, endianness);
         actual.Should().Equal(expected);
     }
 
     [Fact]
-    public void HeaderMessage_空frameId_はROS2出力と一致する()
+    public void Header_空frameId_はROS2出力と一致する()
     {
         var (endianness, expected) = ParseFixture(LoadFixture("std_msgs_Header_empty.bin"));
-        var msg = new HeaderMessage(new Time(0, 0u), "");
-        var actual = Serialize(HeaderMessageSerializer.Instance, in msg, endianness);
+        var msg = new Header(new Time(0, 0u), "");
+        var actual = Serialize(HeaderSerializer.Instance, in msg, endianness);
         actual.Should().Equal(expected);
     }
 
     [Fact]
-    public void HeaderMessage_ROS2出力からデシリアライズできる()
+    public void Header_ROS2出力からデシリアライズできる()
     {
         var (endianness, payload) = ParseFixture(LoadFixture("std_msgs_Header.bin"));
-        var msg = Deserialize(HeaderMessageSerializer.Instance, payload, endianness);
+        var msg = Deserialize(HeaderSerializer.Instance, payload, endianness);
         msg.Stamp.Sec.Should().Be(1234567890);
         msg.Stamp.Nanosec.Should().Be(123456789u);
         msg.FrameId.Should().Be("map");
@@ -126,19 +126,19 @@ public class WireBitExactTests
     // ── std_msgs/ColorRGBA ──
 
     [Fact]
-    public void ColorRgbaMessage_はROS2出力と一致する()
+    public void ColorRgba_はROS2出力と一致する()
     {
         var (endianness, expected) = ParseFixture(LoadFixture("std_msgs_ColorRGBA.bin"));
-        var msg = new ColorRgbaMessage(1.0f, 0.5f, 0.25f, 0.75f);
-        var actual = Serialize(ColorRgbaMessageSerializer.Instance, in msg, endianness);
+        var msg = new ColorRgba(1.0f, 0.5f, 0.25f, 0.75f);
+        var actual = Serialize(ColorRgbaSerializer.Instance, in msg, endianness);
         actual.Should().Equal(expected);
     }
 
     [Fact]
-    public void ColorRgbaMessage_ROS2出力からデシリアライズできる()
+    public void ColorRgba_ROS2出力からデシリアライズできる()
     {
         var (endianness, payload) = ParseFixture(LoadFixture("std_msgs_ColorRGBA.bin"));
-        var msg = Deserialize(ColorRgbaMessageSerializer.Instance, payload, endianness);
+        var msg = Deserialize(ColorRgbaSerializer.Instance, payload, endianness);
         msg.R.Should().Be(1.0f);
         msg.G.Should().Be(0.5f);
         msg.B.Should().Be(0.25f);
