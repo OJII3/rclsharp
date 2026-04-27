@@ -25,16 +25,18 @@ public class DiscoveredEndpointDataSerializerTests
         };
     }
 
-    [Fact]
-    public void 全フィールドの_PL_CDR_往復_Writer()
+    [Theory]
+    [InlineData(CdrEndianness.LittleEndian)]
+    [InlineData(CdrEndianness.BigEndian)]
+    public void 全フィールドの_PL_CDR_往復_Writer(CdrEndianness endian)
     {
         var src = MakeWriter();
         var buf = new byte[1024];
-        var w = new CdrWriter(buf, CdrEndianness.LittleEndian);
+        var w = new CdrWriter(buf, endian);
         DiscoveredEndpointDataSerializer.Write(ref w, src);
         int written = w.Position;
 
-        var r = new CdrReader(buf.AsSpan(0, written), CdrEndianness.LittleEndian);
+        var r = new CdrReader(buf.AsSpan(0, written), endian);
         var read = DiscoveredEndpointDataSerializer.Read(ref r, EndpointKind.Writer);
 
         read.Kind.Should().Be(EndpointKind.Writer);
@@ -53,8 +55,10 @@ public class DiscoveredEndpointDataSerializerTests
         read.Partition.Should().Be(src.Partition);
     }
 
-    [Fact]
-    public void Reliable_durability_TransientLocal_の往復()
+    [Theory]
+    [InlineData(CdrEndianness.LittleEndian)]
+    [InlineData(CdrEndianness.BigEndian)]
+    public void Reliable_durability_TransientLocal_の往復(CdrEndianness endian)
     {
         var src = MakeWriter();
         src.Reliability = new ReliabilityQos(ReliabilityKind.Reliable,
@@ -62,10 +66,10 @@ public class DiscoveredEndpointDataSerializerTests
         src.Durability = DurabilityQos.TransientLocal;
 
         var buf = new byte[1024];
-        var w = new CdrWriter(buf, CdrEndianness.LittleEndian);
+        var w = new CdrWriter(buf, endian);
         DiscoveredEndpointDataSerializer.Write(ref w, src);
 
-        var r = new CdrReader(buf.AsSpan(0, w.Position), CdrEndianness.LittleEndian);
+        var r = new CdrReader(buf.AsSpan(0, w.Position), endian);
         var read = DiscoveredEndpointDataSerializer.Read(ref r, EndpointKind.Writer);
 
         read.Reliability.Kind.Should().Be(ReliabilityKind.Reliable);
@@ -73,8 +77,10 @@ public class DiscoveredEndpointDataSerializerTests
         read.Durability.Kind.Should().Be(DurabilityKind.TransientLocal);
     }
 
-    [Fact]
-    public void 非デフォルト_QoS_の往復()
+    [Theory]
+    [InlineData(CdrEndianness.LittleEndian)]
+    [InlineData(CdrEndianness.BigEndian)]
+    public void 非デフォルト_QoS_の往復(CdrEndianness endian)
     {
         var src = MakeWriter();
         src.Deadline = new DeadlineQos(Duration.FromTimeSpan(TimeSpan.FromSeconds(5)));
@@ -86,10 +92,10 @@ public class DiscoveredEndpointDataSerializerTests
         src.Partition = new PartitionQos("partition_a", "partition_b");
 
         var buf = new byte[2048];
-        var w = new CdrWriter(buf, CdrEndianness.LittleEndian);
+        var w = new CdrWriter(buf, endian);
         DiscoveredEndpointDataSerializer.Write(ref w, src);
 
-        var r = new CdrReader(buf.AsSpan(0, w.Position), CdrEndianness.LittleEndian);
+        var r = new CdrReader(buf.AsSpan(0, w.Position), endian);
         var read = DiscoveredEndpointDataSerializer.Read(ref r, EndpointKind.Writer);
 
         read.Deadline.Period.ToTimeSpan().TotalSeconds.Should().BeApproximately(5, 0.01);
@@ -106,24 +112,28 @@ public class DiscoveredEndpointDataSerializerTests
         read.Partition.Names[1].Should().Be("partition_b");
     }
 
-    [Fact]
-    public void encap_PL_CDR_LE_を含む_serializedPayload_全体()
+    [Theory]
+    [InlineData(CdrEndianness.LittleEndian, (byte)0x03)] // PL_CDR_LE
+    [InlineData(CdrEndianness.BigEndian, (byte)0x02)]     // PL_CDR_BE
+    public void encap_PL_CDR_を含む_serializedPayload_全体(CdrEndianness endian, byte expectedEncapKind)
     {
         var src = MakeWriter();
         var buf = new byte[1024];
-        CdrEncapsulation.Write(buf, CdrEncapsulation.PlCdrLittleEndian);
-        var w = new CdrWriter(buf, CdrEndianness.LittleEndian, cdrOrigin: CdrEncapsulation.Size);
+        var encapKind = CdrEncapsulation.ParameterListCdr(endian);
+        CdrEncapsulation.Write(buf, encapKind);
+        var w = new CdrWriter(buf, endian, cdrOrigin: CdrEncapsulation.Size);
         DiscoveredEndpointDataSerializer.Write(ref w, src);
         int total = w.Position;
 
         // 先頭 4B encap
         buf[0].Should().Be((byte)0x00);
-        buf[1].Should().Be((byte)0x03); // PL_CDR_LE
+        buf[1].Should().Be(expectedEncapKind);
 
         // Read back
         var (kind, _) = CdrEncapsulation.Read(buf.AsSpan(0, 4));
-        var endian = CdrEncapsulation.GetEndianness(kind);
-        var r = new CdrReader(buf.AsSpan(0, total), endian, cdrOrigin: CdrEncapsulation.Size);
+        var readEndian = CdrEncapsulation.GetEndianness(kind);
+        readEndian.Should().Be(endian);
+        var r = new CdrReader(buf.AsSpan(0, total), readEndian, cdrOrigin: CdrEncapsulation.Size);
         var read = DiscoveredEndpointDataSerializer.Read(ref r, EndpointKind.Writer);
         read.EndpointGuid.Should().Be(src.EndpointGuid);
         read.TopicName.Should().Be(src.TopicName);
