@@ -13,7 +13,7 @@ namespace Rclsharp.Msgs.Std;
 /// </code>
 /// CDR 上は 4 バイト境界 × 4 = 16 バイト。
 /// </summary>
-public struct ColorRgbaMessage
+public struct ColorRgba
 {
     public const string RosTypeName = "std_msgs/msg/ColorRGBA";
     public const string DdsTypeName = "std_msgs::msg::dds_::ColorRGBA_";
@@ -23,7 +23,7 @@ public struct ColorRgbaMessage
     public float B;
     public float A;
 
-    public ColorRgbaMessage(float r, float g, float b, float a)
+    public ColorRgba(float r, float g, float b, float a)
     {
         R = r;
         G = g;
@@ -34,15 +34,15 @@ public struct ColorRgbaMessage
     public override string ToString() => $"ColorRGBA(r={R}, g={G}, b={B}, a={A})";
 }
 
-public sealed class ColorRgbaMessageSerializer : ICdrSerializer<ColorRgbaMessage>
+public sealed class ColorRgbaSerializer : ICdrSerializer<ColorRgba>
 {
-    public static readonly ColorRgbaMessageSerializer Instance = new();
+    public static readonly ColorRgbaSerializer Instance = new();
 
     public bool IsKeyed => false;
 
-    public int GetSerializedSize(in ColorRgbaMessage value) => 16;
+    public int GetSerializedSize(in ColorRgba value) => 16;
 
-    public void Serialize(ref CdrWriter writer, in ColorRgbaMessage value)
+    public void Serialize(ref CdrWriter writer, in ColorRgba value)
     {
         writer.WriteFloat(value.R);
         writer.WriteFloat(value.G);
@@ -50,16 +50,16 @@ public sealed class ColorRgbaMessageSerializer : ICdrSerializer<ColorRgbaMessage
         writer.WriteFloat(value.A);
     }
 
-    public void Deserialize(ref CdrReader reader, out ColorRgbaMessage value)
+    public void Deserialize(ref CdrReader reader, out ColorRgba value)
     {
         float r = reader.ReadFloat();
         float g = reader.ReadFloat();
         float b = reader.ReadFloat();
         float a = reader.ReadFloat();
-        value = new ColorRgbaMessage(r, g, b, a);
+        value = new ColorRgba(r, g, b, a);
     }
 
-    public void SerializeKey(ref CdrWriter writer, in ColorRgbaMessage value)
+    public void SerializeKey(ref CdrWriter writer, in ColorRgba value)
     {
     }
 }
