@@ -72,8 +72,14 @@ public sealed class DomainParticipant : IDisposable
 
     private sealed class LocalUserReader
     {
-        public required DiscoveredEndpointData EndpointData { get; init; }
-        public required StatelessReader Reader { get; init; }
+        public LocalUserReader(DiscoveredEndpointData endpointData, StatelessReader reader)
+        {
+            EndpointData = endpointData ?? throw new ArgumentNullException(nameof(endpointData));
+            Reader = reader ?? throw new ArgumentNullException(nameof(reader));
+        }
+
+        public DiscoveredEndpointData EndpointData { get; }
+        public StatelessReader Reader { get; }
     }
 
     public DomainParticipant(DomainParticipantOptions options)
@@ -510,7 +516,7 @@ public sealed class DomainParticipant : IDisposable
         };
         endpointData.UnicastLocators.Add(_defaultUnicastLocator);
         endpointData.MulticastLocators.Add(_defaultMulticastLocator);
-        var localReader = new LocalUserReader { EndpointData = endpointData, Reader = reader };
+        var localReader = new LocalUserReader(endpointData, reader);
         lock (_localEndpointsLock)
         {
             _localReaders.Add(endpointData);

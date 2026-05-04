@@ -25,6 +25,13 @@ dotnet build
 dotnet test
 ```
 
+## Unity 互換性
+
+Unity では API Compatibility Level を .NET Standard 2.1 に設定して利用します。
+Unity 2022.3 の C# コンパイラは C# 11 の `required` members に対応していないため、
+ライブラリ本体では `required` を使わず、Unity 同梱の .NET Standard 2.1 参照アセンブリで
+コンパイルできる API に留めます。
+
 ## サンプル: SPDP Demo
 
 指定ドメインの SPDP マルチキャストに参加し、他の Participant (rclsharp 同士 / ROS 2 ノード) を検出します。
