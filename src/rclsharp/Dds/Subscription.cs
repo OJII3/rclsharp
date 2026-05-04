@@ -15,7 +15,7 @@ public sealed class Subscription<T> : IDisposable
     private readonly StatelessReader _reader;
     private readonly ICdrSerializer<T> _serializer;
     private readonly Action<T, GuidPrefix> _handler;
-    private readonly Action<Guid>? _unregisterEndpoint;
+    private readonly Action<Guid, StatelessReader>? _unregisterEndpoint;
     private bool _disposed;
 
     public string TopicName { get; }
@@ -28,7 +28,7 @@ public sealed class Subscription<T> : IDisposable
         StatelessReader reader,
         ICdrSerializer<T> serializer,
         Action<T, GuidPrefix> handler,
-        Action<Guid>? unregisterEndpoint = null,
+        Action<Guid, StatelessReader>? unregisterEndpoint = null,
         bool autoStart = true)
     {
         TopicName = topicName;
@@ -80,7 +80,7 @@ public sealed class Subscription<T> : IDisposable
         }
         _disposed = true;
         _reader.PayloadReceived -= OnPayloadReceived;
-        _unregisterEndpoint?.Invoke(Guid);
+        _unregisterEndpoint?.Invoke(Guid, _reader);
         _reader.Dispose();
     }
 }

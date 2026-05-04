@@ -14,7 +14,7 @@ public sealed class Publisher<T> : IDisposable
 {
     private readonly StatefulWriter _writer;
     private readonly ICdrSerializer<T> _serializer;
-    private readonly Action<Guid>? _unregisterEndpoint;
+    private readonly Action<Guid, StatefulWriter>? _unregisterEndpoint;
     private bool _disposed;
 
     public string TopicName { get; }
@@ -25,7 +25,7 @@ public sealed class Publisher<T> : IDisposable
         string topicName,
         StatefulWriter writer,
         ICdrSerializer<T> serializer,
-        Action<Guid>? unregisterEndpoint = null)
+        Action<Guid, StatefulWriter>? unregisterEndpoint = null)
     {
         TopicName = topicName;
         _writer = writer;
@@ -63,7 +63,7 @@ public sealed class Publisher<T> : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        _unregisterEndpoint?.Invoke(Guid);
+        _unregisterEndpoint?.Invoke(Guid, _writer);
         _writer.Dispose();
     }
 
