@@ -1,6 +1,7 @@
 using System.Net;
 using Rclsharp.Common;
 using Rclsharp.Dds;
+using Rclsharp.Dds.QoS;
 using Rclsharp.Discovery;
 using Rclsharp.Msgs.Std;
 using Rclsharp.Transport;
@@ -119,6 +120,35 @@ public class SedpLoopbackTests
 
         var ep = await writerSeenByB.Task.WaitAsync(DiscoveryTimeout);
         ep.Data.TypeName.Should().Be(StringMessage.DdsTypeName);
+    }
+
+    [Fact]
+    public async Task Publisher_endpoint_は指定した_reliability_QoS_を広告する()
+    {
+        var env = CreatePair();
+        using var pA = env.ParticipantA;
+        using var pB = env.ParticipantB;
+
+        var writerSeenByB = new TaskCompletionSource<RemoteEndpoint>(TaskCreationOptions.RunContinuationsAsynchronously);
+        pB.DiscoveryDb.WriterDiscovered += ep =>
+        {
+            if (ep.Data.ParticipantGuid.Prefix.Equals(pA.GuidPrefix))
+            {
+                writerSeenByB.TrySetResult(ep);
+            }
+        };
+
+        using var pub = pA.CreatePublisher<StringMessage>(
+            "best_effort_chatter",
+            StringMessageSerializer.Instance,
+            ReliabilityQos.BestEffort);
+
+        pA.Start();
+        pB.Start();
+
+        var ep = await writerSeenByB.Task.WaitAsync(DiscoveryTimeout);
+        ep.Data.TopicName.Should().Be("rt/best_effort_chatter");
+        ep.Data.Reliability.Should().Be(ReliabilityQos.BestEffort);
     }
 
     [Fact]

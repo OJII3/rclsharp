@@ -523,6 +523,17 @@ public sealed class DomainParticipant : IDisposable
     /// (Phase 5 互換)。同時にローカル endpoint 一覧へ登録され、SEDP で広告される (Phase 6)。
     /// </summary>
     public Publisher<T> CreatePublisher<T>(string topicName, ICdrSerializer<T> serializer, string? typeName = null)
+        => CreatePublisher(topicName, serializer, ReliabilityQos.Reliable, typeName);
+
+    /// <summary>
+    /// 指定トピックの Publisher を生成する。
+    /// <paramref name="reliability"/> は SEDP で広告する reliability QoS として使われる。
+    /// </summary>
+    public Publisher<T> CreatePublisher<T>(
+        string topicName,
+        ICdrSerializer<T> serializer,
+        ReliabilityQos reliability,
+        string? typeName = null)
     {
         ThrowIfDisposed();
         if (string.IsNullOrEmpty(topicName)) throw new ArgumentException("Value cannot be null or empty.", nameof(topicName));
@@ -552,7 +563,7 @@ public sealed class DomainParticipant : IDisposable
             ParticipantGuid = Guid,
             TopicName = ddsTopic,
             TypeName = ddsTypeName,
-            Reliability = ReliabilityQos.Reliable,
+            Reliability = reliability,
             Durability = DurabilityQos.Volatile,
         };
         endpointData.UnicastLocators.Add(_defaultUnicastLocator);

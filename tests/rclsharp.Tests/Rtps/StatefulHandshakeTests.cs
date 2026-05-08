@@ -1,5 +1,6 @@
 using System.Net;
 using Rclsharp.Common;
+using Rclsharp.Rtps;
 using Rclsharp.Rtps.HistoryCache;
 using Rclsharp.Rtps.Reader;
 using Rclsharp.Rtps.Submessages;
@@ -242,7 +243,7 @@ public class StatefulHandshakeTests
             writer.MatchReader(readerGuid, s.ReaderLocator);
 
             var gapTcs = new TaskCompletionSource<GapSubmessage>(TaskCreationOptions.RunContinuationsAsynchronously);
-            s.ReaderTransport.Received += (packet, _) =>
+            s.ReaderTransport.Received += (packet, remote) =>
             {
                 if (!RtpsHeader.TryRead(packet.Span, out _, out _, out _))
                 {
