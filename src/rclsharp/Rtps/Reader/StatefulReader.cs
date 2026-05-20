@@ -148,23 +148,23 @@ public sealed class StatefulReader : IDisposable
                         lock (_matchedLock) { _matched.TryGetValue(writerGuid, out proxy); }
                         if (proxy is null) continue;
 
-                        byte[]? completedPayload;
+                        DataFragReassemblyResult? completed;
                         lock (_reassemblyLock)
                         {
-                            completedPayload = _dataFragReassembly.Add(writerGuid, dataFrag);
+                            completed = _dataFragReassembly.Add(writerGuid, dataFrag, hdr.Endianness);
                         }
-                        if (completedPayload is null) continue;
+                        if (completed is null) continue;
 
                         bool isNew = proxy.MarkReceived(dataFrag.WriterSequenceNumber);
                         if (isNew)
                         {
-                            var kind = ToChangeKind(dataFrag.InlineQos.Span, hdr.Endianness);
+                            var kind = ToChangeKind(completed.Value.InlineQos.Span, completed.Value.InlineQosEndianness);
                             var change = new CacheChange(
                                 kind,
                                 writerGuid,
                                 dataFrag.WriterSequenceNumber,
                                 Time.Zero,
-                                completedPayload);
+                                completed.Value.Payload);
                             PayloadReceived?.Invoke(change);
                         }
                         break;

@@ -210,19 +210,19 @@ public sealed class StatelessReader : IDisposable
         }
 
         var writerGuid = new Guid(sourcePrefix, dataFrag.WriterEntityId);
-        byte[]? completedPayload;
+        DataFragReassemblyResult? completed;
         lock (_reassemblyLock)
         {
-            completedPayload = _dataFragReassembly.Add(writerGuid, dataFrag);
+            completed = _dataFragReassembly.Add(writerGuid, dataFrag, hdr.Endianness);
         }
-        if (completedPayload is not null)
+        if (completed is not null)
         {
             if (!IsMatchedWriter(writerGuid))
             {
-                BufferPendingPayload(writerGuid, completedPayload, sourcePrefix, dataFrag.WriterSequenceNumber);
+                BufferPendingPayload(writerGuid, completed.Value.Payload, sourcePrefix, dataFrag.WriterSequenceNumber);
                 return;
             }
-            DeliverPayload(writerGuid, dataFrag.WriterSequenceNumber, completedPayload, sourcePrefix);
+            DeliverPayload(writerGuid, dataFrag.WriterSequenceNumber, completed.Value.Payload, sourcePrefix);
         }
     }
 

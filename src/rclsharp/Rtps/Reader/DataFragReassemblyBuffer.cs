@@ -1,3 +1,4 @@
+using Rclsharp.Cdr;
 using Rclsharp.Common;
 using Rclsharp.Rtps.Submessages;
 
@@ -18,7 +19,10 @@ internal sealed class DataFragReassemblyBuffer
         _clock = clock ?? (() => DateTime.UtcNow);
     }
 
-    public byte[]? Add(Guid writerGuid, DataFragSubmessage fragment)
+    public DataFragReassemblyResult? Add(
+        Guid writerGuid,
+        DataFragSubmessage fragment,
+        CdrEndianness endianness)
     {
         if (fragment.SampleSize > (uint)_options.MaxSampleSize)
         {
@@ -45,7 +49,7 @@ internal sealed class DataFragReassemblyBuffer
             return null;
         }
 
-        if (!sample.TryAdd(fragment, now))
+        if (!sample.TryAdd(fragment, endianness, now))
         {
             return null;
         }
@@ -55,7 +59,7 @@ internal sealed class DataFragReassemblyBuffer
         }
 
         _samples.Remove(key);
-        return sample.Buffer;
+        return new DataFragReassemblyResult(sample.Buffer, sample.InlineQos, sample.InlineQosEndianness);
     }
 
     private void RemoveExpired(DateTime now)
@@ -125,10 +129,12 @@ internal sealed class DataFragReassemblyBuffer
 
         public byte[] Buffer { get; }
         public ushort FragmentSize { get; }
+        public ReadOnlyMemory<byte> InlineQos { get; private set; }
+        public CdrEndianness InlineQosEndianness { get; private set; } = CdrEndianness.LittleEndian;
         public DateTime LastUpdated { get; private set; }
         public bool IsComplete => _receivedCount == _receivedFragments.Length;
 
-        public bool TryAdd(DataFragSubmessage fragment, DateTime updatedAt)
+        public bool TryAdd(DataFragSubmessage fragment, CdrEndianness endianness, DateTime updatedAt)
         {
             var payload = fragment.SerializedPayloadFragment.Span;
             int expectedPayloadLength = 0;
@@ -175,6 +181,12 @@ internal sealed class DataFragReassemblyBuffer
                     _receivedFragments[fragmentIndex] = true;
                     _receivedCount++;
                 }
+            }
+
+            if (!fragment.InlineQos.IsEmpty && InlineQos.IsEmpty)
+            {
+                InlineQos = fragment.InlineQos.ToArray();
+                InlineQosEndianness = endianness;
             }
 
             LastUpdated = updatedAt;

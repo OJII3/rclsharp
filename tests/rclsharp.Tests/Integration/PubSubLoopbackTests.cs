@@ -306,6 +306,59 @@ public class PubSubLoopbackTests
         received.Data.Should().Be("fragmented fastdds-style payload");
     }
 
+    [Fact]
+    public async Task SEDP_で発見した_remote_writer_の_unicast_DATA_FRAG_を再構成して受信できる()
+    {
+        var env = CreatePair();
+        using var pB = env.ParticipantB;
+
+        var receivedTcs = new TaskCompletionSource<StringMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var sub = pB.CreateSubscription<StringMessage>(
+            "image_text_unicast",
+            StringMessageSerializer.Instance,
+            (msg, _) => receivedTcs.TrySetResult(msg),
+            StringMessage.DdsTypeName);
+
+        pB.Start();
+
+        var remotePrefix = GuidPrefix.CreateForCurrentProcess(VendorId.EProsimaFastDds);
+        var remoteWriterId = new EntityId(0x000005u, EntityKind.UserDefinedWriterNoKey);
+        var remoteWriterGuid = new Rclsharp.Common.Guid(remotePrefix, remoteWriterId);
+        pB.DiscoveryDb.UpsertEndpoint(new DiscoveredEndpointData
+        {
+            Kind = EndpointKind.Writer,
+            EndpointGuid = remoteWriterGuid,
+            ParticipantGuid = new Rclsharp.Common.Guid(remotePrefix, EntityId.Participant),
+            TopicName = "rt/image_text_unicast",
+            TypeName = StringMessage.DdsTypeName,
+        }, DateTime.UtcNow);
+
+        using var remoteTransport = env.Hub.Create(Locator.FromUdpV4(IPAddress.Parse("10.0.0.10"), 9002u));
+        var payload = SerializeStringPayload(new StringMessage("fragmented unicast payload"));
+        const ushort fragmentSize = 7;
+        int fragmentCount = (payload.Length + fragmentSize - 1) / fragmentSize;
+
+        for (int fragmentIndex = 0; fragmentIndex < fragmentCount; fragmentIndex++)
+        {
+            int offset = fragmentIndex * fragmentSize;
+            int length = Math.Min(fragmentSize, payload.Length - offset);
+            var packet = BuildDataFragPacket(
+                remotePrefix,
+                remoteWriterId,
+                sub.Guid.EntityId,
+                new SequenceNumber(12),
+                fragmentStartingNumber: (uint)fragmentIndex + 1,
+                fragmentsInSubmessage: 1,
+                fragmentSize: fragmentSize,
+                sampleSize: (uint)payload.Length,
+                payload.AsMemory(offset, length));
+            await remoteTransport.SendAsync(packet, env.UserUnicastBLocator);
+        }
+
+        var received = await receivedTcs.Task.WaitAsync(ReceiveTimeout);
+        received.Data.Should().Be("fragmented unicast payload");
+    }
+
     private static byte[] SerializeStringPayload(StringMessage value)
     {
         var buffer = new byte[128];

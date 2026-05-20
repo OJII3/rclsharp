@@ -25,6 +25,7 @@ rclsharp の user reader は `DATA` と `DATA_FRAG` のどちらも同じ serial
 
 `DATA_FRAG` は remote writer GUID、writer sequence number、sample size をキーに再構成する。
 fragment number は 1 始まりとして扱い、重複 fragment は同じ位置に上書きして安全に無視する。
+fragmented sample に `InlineQos` が含まれる場合は、sample 完成時に最後に届いた fragment ではなく、再構成中に受け取った `InlineQos` を使って `STATUS_INFO` を判定する。
 未完成 sample は reader 内に保持するが、大容量 topic でメモリを食い潰さないよう、sample size 上限、同時再構成数、TTL による破棄を reader の責務にする。
 
 user endpoint の EntityId は topic hash ではなく participant 内の連番 allocator で割り当てる。

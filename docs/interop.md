@@ -34,12 +34,24 @@ Nix devShell では `ros2` CLI の Python extension が macOS の動的ライブ
 - `ROS_LOCALHOST_ONLY=1` とスクリプトが選んだ `ROS_DOMAIN_ID` で loopback 通信できること
 - 検証前に `ros2 daemon stop` して古い graph cache の影響を避けること
 
+## Fast DDS large payload
+
+Fast DDS が `DATA_FRAG` を使うサイズの payload は次のスクリプトで確認する。
+
+```sh
+scripts/interop/fastdds_large_string.sh
+```
+
+このスクリプトは ROS 2 CLI から 32KB 超の `std_msgs/msg/String` を publish し、rclsharp listener が実 payload を受信できることを確認する。
+`ros2 topic pub` を使うため、`ros2` CLI が動作する Linux または ROS 2 セットアップ済み環境で実行する。
+
 ## 判定基準
 
 interop の成功条件は introspection 結果ではなく、実際の受信ログにする。
 
 - ROS 2 listener 側で `Hello rclsharp` を受信している
 - rclsharp listener 側で `Hello World` または `Hello rclsharp` を受信している
+- large payload 検証では rclsharp listener 側で `large-payload-` を含む message を受信している
 
 ## 次に追加する検証
 
