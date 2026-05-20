@@ -44,6 +44,7 @@ public class PubSubLoopbackTests
             DomainId = 0, ParticipantId = 1, EntityName = "node_a",
             MulticastGroup = multicastIp,
             SpdpInterval = TimeSpan.FromMilliseconds(50),
+            SedpInterval = TimeSpan.FromMilliseconds(50),
             CustomMulticastTransport = spdpA,
             CustomUnicastTransport = ucA,
             CustomUserMulticastTransport = userMcA,
@@ -54,6 +55,7 @@ public class PubSubLoopbackTests
             DomainId = 0, ParticipantId = 2, EntityName = "node_b",
             MulticastGroup = multicastIp,
             SpdpInterval = TimeSpan.FromMilliseconds(50),
+            SedpInterval = TimeSpan.FromMilliseconds(50),
             CustomMulticastTransport = spdpB,
             CustomUnicastTransport = ucB,
             CustomUserMulticastTransport = userMcB,
@@ -82,6 +84,8 @@ public class PubSubLoopbackTests
 
         pA.Start();
         pB.Start();
+
+        await WaitUntilDiscoveredAsync(pA, pB, "rt/chatter");
 
         await pub.PublishAsync(new StringMessage("hello rclsharp"));
 
@@ -135,13 +139,25 @@ public class PubSubLoopbackTests
         pA.Start();
         pB.Start();
 
+        await WaitUntilDiscoveredAsync(pA, pB, "rt/chatter");
+
         for (int i = 0; i < 10; i++)
         {
             await pub.PublishAsync(new StringMessage($"msg{i}"));
         }
 
-        // 受信猶予 (Loopback は同期配信なので即時のはず)
-        await Task.Delay(100);
+        var deadline = DateTime.UtcNow + ReceiveTimeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            lock (lockObj)
+            {
+                if (received.Count == 10)
+                {
+                    break;
+                }
+            }
+            await Task.Delay(10);
+        }
 
         lock (lockObj)
         {
@@ -171,6 +187,32 @@ public class PubSubLoopbackTests
         await pub.PublishAsync(new StringMessage("self-pub"));
         var received = await receivedTcs.Task.WaitAsync(ReceiveTimeout);
         received.Data.Should().Be("self-pub");
+    }
+
+    [Fact]
+    public async Task late_Subscription_には_VOLATILE_user_writer_の履歴を再送しない()
+    {
+        var env = CreatePair();
+        using var pA = env.ParticipantA;
+        using var pB = env.ParticipantB;
+
+        using var pub = pA.CreatePublisher<StringMessage>("volatile_topic", StringMessageSerializer.Instance);
+
+        pA.Start();
+        pB.Start();
+
+        await pub.PublishAsync(new StringMessage("before subscription"));
+        await Task.Delay(100);
+
+        bool received = false;
+        using var sub = pB.CreateSubscription<StringMessage>(
+            "volatile_topic",
+            StringMessageSerializer.Instance,
+            (_, _) => received = true);
+
+        await Task.Delay(300);
+
+        received.Should().BeFalse();
     }
 
     [Fact]
@@ -210,6 +252,113 @@ public class PubSubLoopbackTests
         received.Data.Should().Be("fastdds-style unicast");
     }
 
+    [Fact]
+    public async Task SEDP_で発見した_remote_writer_の_multicast_DATA_FRAG_を再構成して受信できる()
+    {
+        var env = CreatePair();
+        using var pB = env.ParticipantB;
+
+        var receivedTcs = new TaskCompletionSource<StringMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var sub = pB.CreateSubscription<StringMessage>(
+            "image_text",
+            StringMessageSerializer.Instance,
+            (msg, _) => receivedTcs.TrySetResult(msg),
+            StringMessage.DdsTypeName);
+
+        pB.Start();
+
+        var remotePrefix = GuidPrefix.CreateForCurrentProcess(VendorId.EProsimaFastDds);
+        var remoteWriterId = new EntityId(0x000005u, EntityKind.UserDefinedWriterNoKey);
+        var remoteWriterGuid = new Rclsharp.Common.Guid(remotePrefix, remoteWriterId);
+        pB.DiscoveryDb.UpsertEndpoint(new DiscoveredEndpointData
+        {
+            Kind = EndpointKind.Writer,
+            EndpointGuid = remoteWriterGuid,
+            ParticipantGuid = new Rclsharp.Common.Guid(remotePrefix, EntityId.Participant),
+            TopicName = "rt/image_text",
+            TypeName = StringMessage.DdsTypeName,
+        }, DateTime.UtcNow);
+
+        using var remoteTransport = env.Hub.Create(Locator.FromUdpV4(IPAddress.Parse("10.0.0.10"), 9001u));
+        var payload = SerializeStringPayload(new StringMessage("fragmented fastdds-style payload"));
+        const ushort fragmentSize = 8;
+        int fragmentCount = (payload.Length + fragmentSize - 1) / fragmentSize;
+
+        for (int fragmentIndex = fragmentCount - 1; fragmentIndex >= 0; fragmentIndex--)
+        {
+            int offset = fragmentIndex * fragmentSize;
+            int length = Math.Min(fragmentSize, payload.Length - offset);
+            var fragmentPayload = payload.AsSpan(offset, length).ToArray();
+            var packet = BuildDataFragPacket(
+                remotePrefix,
+                remoteWriterId,
+                sub.Guid.EntityId,
+                new SequenceNumber(11),
+                fragmentStartingNumber: (uint)fragmentIndex + 1,
+                fragmentsInSubmessage: 1,
+                fragmentSize: fragmentSize,
+                sampleSize: (uint)payload.Length,
+                fragmentPayload);
+            await remoteTransport.SendAsync(packet, pB.UserMulticastDestination);
+        }
+
+        var received = await receivedTcs.Task.WaitAsync(ReceiveTimeout);
+        received.Data.Should().Be("fragmented fastdds-style payload");
+    }
+
+    [Fact]
+    public async Task SEDP_で発見した_remote_writer_の_unicast_DATA_FRAG_を再構成して受信できる()
+    {
+        var env = CreatePair();
+        using var pB = env.ParticipantB;
+
+        var receivedTcs = new TaskCompletionSource<StringMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var sub = pB.CreateSubscription<StringMessage>(
+            "image_text_unicast",
+            StringMessageSerializer.Instance,
+            (msg, _) => receivedTcs.TrySetResult(msg),
+            StringMessage.DdsTypeName);
+
+        pB.Start();
+
+        var remotePrefix = GuidPrefix.CreateForCurrentProcess(VendorId.EProsimaFastDds);
+        var remoteWriterId = new EntityId(0x000005u, EntityKind.UserDefinedWriterNoKey);
+        var remoteWriterGuid = new Rclsharp.Common.Guid(remotePrefix, remoteWriterId);
+        pB.DiscoveryDb.UpsertEndpoint(new DiscoveredEndpointData
+        {
+            Kind = EndpointKind.Writer,
+            EndpointGuid = remoteWriterGuid,
+            ParticipantGuid = new Rclsharp.Common.Guid(remotePrefix, EntityId.Participant),
+            TopicName = "rt/image_text_unicast",
+            TypeName = StringMessage.DdsTypeName,
+        }, DateTime.UtcNow);
+
+        using var remoteTransport = env.Hub.Create(Locator.FromUdpV4(IPAddress.Parse("10.0.0.10"), 9002u));
+        var payload = SerializeStringPayload(new StringMessage("fragmented unicast payload"));
+        const ushort fragmentSize = 7;
+        int fragmentCount = (payload.Length + fragmentSize - 1) / fragmentSize;
+
+        for (int fragmentIndex = 0; fragmentIndex < fragmentCount; fragmentIndex++)
+        {
+            int offset = fragmentIndex * fragmentSize;
+            int length = Math.Min(fragmentSize, payload.Length - offset);
+            var packet = BuildDataFragPacket(
+                remotePrefix,
+                remoteWriterId,
+                sub.Guid.EntityId,
+                new SequenceNumber(12),
+                fragmentStartingNumber: (uint)fragmentIndex + 1,
+                fragmentsInSubmessage: 1,
+                fragmentSize: fragmentSize,
+                sampleSize: (uint)payload.Length,
+                payload.AsMemory(offset, length));
+            await remoteTransport.SendAsync(packet, env.UserUnicastBLocator);
+        }
+
+        var received = await receivedTcs.Task.WaitAsync(ReceiveTimeout);
+        received.Data.Should().Be("fragmented unicast payload");
+    }
+
     private static byte[] SerializeStringPayload(StringMessage value)
     {
         var buffer = new byte[128];
@@ -235,5 +384,56 @@ public class PubSubLoopbackTests
             serializedPayload: payload,
             dataPresent: true));
         return writer.WrittenSpan.ToArray();
+    }
+
+    private static byte[] BuildDataFragPacket(
+        GuidPrefix sourcePrefix,
+        EntityId writerId,
+        EntityId readerId,
+        SequenceNumber sequenceNumber,
+        uint fragmentStartingNumber,
+        ushort fragmentsInSubmessage,
+        ushort fragmentSize,
+        uint sampleSize,
+        ReadOnlyMemory<byte> fragmentPayload)
+    {
+        var buffer = new byte[1500];
+        var writer = new RtpsMessageWriter(buffer, ProtocolVersion.V2_4, VendorId.EProsimaFastDds, sourcePrefix);
+        writer.WriteDataFrag(new DataFragSubmessage(
+            readerEntityId: readerId,
+            writerEntityId: writerId,
+            writerSn: sequenceNumber,
+            fragmentStartingNumber: fragmentStartingNumber,
+            fragmentsInSubmessage: fragmentsInSubmessage,
+            fragmentSize: fragmentSize,
+            sampleSize: sampleSize,
+            serializedPayloadFragment: fragmentPayload));
+        return writer.WrittenSpan.ToArray();
+    }
+
+    private static async Task WaitUntilDiscoveredAsync(DomainParticipant writerParticipant, DomainParticipant readerParticipant, string ddsTopic)
+    {
+        var deadline = DateTime.UtcNow + ReceiveTimeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            bool writerSeen = readerParticipant.DiscoveryDb.WriterSnapshot()
+                .Any(ep => ep.Data.TopicName == ddsTopic
+                        && ep.Data.ParticipantGuid.Prefix.Equals(writerParticipant.GuidPrefix));
+            bool readerSeen = writerParticipant.DiscoveryDb.ReaderSnapshot()
+                .Any(ep => ep.Data.TopicName == ddsTopic
+                        && ep.Data.ParticipantGuid.Prefix.Equals(readerParticipant.GuidPrefix));
+            if (writerSeen && readerSeen)
+            {
+                return;
+            }
+            await Task.Delay(50);
+        }
+
+        readerParticipant.DiscoveryDb.WriterSnapshot().Should()
+            .Contain(ep => ep.Data.TopicName == ddsTopic
+                        && ep.Data.ParticipantGuid.Prefix.Equals(writerParticipant.GuidPrefix));
+        writerParticipant.DiscoveryDb.ReaderSnapshot().Should()
+            .Contain(ep => ep.Data.TopicName == ddsTopic
+                        && ep.Data.ParticipantGuid.Prefix.Equals(readerParticipant.GuidPrefix));
     }
 }

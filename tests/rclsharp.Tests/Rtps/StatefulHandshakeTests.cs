@@ -1,4 +1,5 @@
 using System.Net;
+using Rclsharp.Cdr;
 using Rclsharp.Common;
 using Rclsharp.Rtps;
 using Rclsharp.Rtps.HistoryCache;
@@ -279,6 +280,58 @@ public class StatefulHandshakeTests
         }
     }
 
+    [Fact]
+    public async Task DATA_FRAG_InlineQos_STATUS_INFO_を_完成fragment以外から反映する()
+    {
+        var s = CreateSetup();
+        var writerGuid = new Guid(s.WriterPrefix, s.WriterEntityId);
+        var reader = new StatefulReader(
+            replyTransport: s.ReaderTransport,
+            version: ProtocolVersion.V2_4,
+            vendorId: VendorId.Rclsharp,
+            localPrefix: s.ReaderPrefix,
+            readerEntityId: s.ReaderEntityId,
+            ackNackFallbackDestination: s.WriterLocator);
+        using (reader)
+        {
+            reader.MatchWriter(writerGuid, s.WriterLocator);
+            var receivedTcs = new TaskCompletionSource<CacheChange>(TaskCreationOptions.RunContinuationsAsynchronously);
+            reader.PayloadReceived += change => receivedTcs.TrySetResult(change);
+
+            var payload = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 };
+            var inlineQos = DataSubmessage.BuildStatusInfoInlineQos(
+                DataSubmessage.StatusInfoUnregistered,
+                CdrEndianness.LittleEndian);
+
+            reader.ProcessPacket(BuildDataFragPacket(
+                s.WriterPrefix,
+                s.WriterEntityId,
+                s.ReaderEntityId,
+                new SequenceNumber(10),
+                fragmentStartingNumber: 1,
+                fragmentsInSubmessage: 1,
+                fragmentSize: 4,
+                sampleSize: (uint)payload.Length,
+                fragmentPayload: payload.AsMemory(0, 4),
+                inlineQos: inlineQos,
+                keyPresent: true));
+            reader.ProcessPacket(BuildDataFragPacket(
+                s.WriterPrefix,
+                s.WriterEntityId,
+                s.ReaderEntityId,
+                new SequenceNumber(10),
+                fragmentStartingNumber: 2,
+                fragmentsInSubmessage: 1,
+                fragmentSize: 4,
+                sampleSize: (uint)payload.Length,
+                fragmentPayload: payload.AsMemory(4, 4)));
+
+            var change = await receivedTcs.Task.WaitAsync(ReceiveTimeout);
+            change.Kind.Should().Be(ChangeKind.NotAliveUnregistered);
+            change.SerializedPayload.ToArray().Should().Equal(payload);
+        }
+    }
+
     private static byte[] BuildAckNackPacket(
         GuidPrefix sourcePrefix,
         EntityId readerEntityId,
@@ -293,6 +346,35 @@ public class StatefulHandshakeTests
             readerSnState,
             count: 1,
             final: false));
+        return writer.WrittenSpan.ToArray();
+    }
+
+    private static byte[] BuildDataFragPacket(
+        GuidPrefix sourcePrefix,
+        EntityId writerEntityId,
+        EntityId readerEntityId,
+        SequenceNumber sequenceNumber,
+        uint fragmentStartingNumber,
+        ushort fragmentsInSubmessage,
+        ushort fragmentSize,
+        uint sampleSize,
+        ReadOnlyMemory<byte> fragmentPayload,
+        ReadOnlyMemory<byte> inlineQos = default,
+        bool keyPresent = false)
+    {
+        var buffer = new byte[1500];
+        var writer = new RtpsMessageWriter(buffer, ProtocolVersion.V2_4, VendorId.Rclsharp, sourcePrefix);
+        writer.WriteDataFrag(new DataFragSubmessage(
+            readerEntityId,
+            writerEntityId,
+            sequenceNumber,
+            fragmentStartingNumber,
+            fragmentsInSubmessage,
+            fragmentSize,
+            sampleSize,
+            fragmentPayload,
+            inlineQos,
+            keyPresent));
         return writer.WrittenSpan.ToArray();
     }
 }
