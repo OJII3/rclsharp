@@ -5,6 +5,11 @@
 - 変更は細かくコミットすること. コミットメッセージは日本語で conventional コミットに従う.
 - `main` ブランチにコミットしない. コミットをする前にブランチを切り、すべてのタスクが終了したら PR を作成すること。
 
+## Unity メタファイル
+
+- Unity で取り込む `src/rclsharp` 配下のファイル・フォルダには `.meta` を必ずコミットすること。
+- `.meta` の不足や orphan は `scripts/check_unity_meta.sh` で確認すること。
+
 ## msg 型の命名方針 (案 B)
 
 `Rclsharp.Msgs.*` 配下の msg 型は以下のルールに従う:
