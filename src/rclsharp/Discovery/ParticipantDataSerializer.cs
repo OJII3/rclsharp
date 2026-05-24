@@ -155,6 +155,11 @@ public static class ParticipantDataSerializer
                     data.EntityName = pl.ReadString();
                     break;
 
+                case ParameterId.DomainTagBase:
+                    // PID_DOMAIN_TAG is a known DDSI-RTPS 2.5 must-understand PID.
+                    // rclsharp does not use it for matching yet, but it must not make SPDP fail.
+                    break;
+
                 default:
                     ParameterId.ThrowIfUnknownMustUnderstand(pid);
                     break;

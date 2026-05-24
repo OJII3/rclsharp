@@ -64,7 +64,8 @@ public static class ParameterId
 
     // Domain
     public const ushort DomainId = 0x000F;
-    public const ushort DomainTag = 0x4014;
+    public const ushort DomainTagBase = 0x0014;
+    public const ushort DomainTag = MustUnderstandFlag | DomainTagBase;
 
     // Type information (XTYPES)
     public const ushort TypeMaxSizeSerialized = 0x0060;

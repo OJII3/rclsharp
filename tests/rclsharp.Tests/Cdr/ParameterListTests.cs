@@ -13,6 +13,8 @@ public class ParameterListTests
         ParameterId.VendorId.Should().Be((ushort)0x0016);
         ParameterId.ParticipantGuid.Should().Be((ushort)0x0050);
         ParameterId.BuiltinEndpointSet.Should().Be((ushort)0x0058);
+        ParameterId.DomainTag.Should().Be((ushort)0x4014);
+        ParameterId.StripFlags(ParameterId.DomainTag).Should().Be(ParameterId.DomainTagBase);
         ParameterId.KeyHash.Should().Be((ushort)0x0070);
     }
 

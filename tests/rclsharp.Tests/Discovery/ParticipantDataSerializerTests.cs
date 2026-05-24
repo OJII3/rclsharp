@@ -168,6 +168,31 @@ public class ParticipantDataSerializerTests
     }
 
     [Fact]
+    public void PID_DOMAIN_TAG_は既知_must_understand_PID_としてスキップされる()
+    {
+        var buf = new byte[256];
+        var w = new CdrWriter(buf, CdrEndianness.LittleEndian);
+        var pl = new ParameterListWriter(w);
+
+        pl.BeginParameter(ParameterId.DomainTag);
+        pl.WriteString("");
+        pl.EndParameter();
+
+        pl.BeginParameter(ParameterId.ProtocolVersion);
+        pl.WriteByte(2);
+        pl.WriteByte(5);
+        pl.EndParameter();
+
+        pl.WriteSentinel();
+        var serialized = buf[..pl.CurrentWriter.Position].ToArray();
+
+        var r = new CdrReader(serialized, CdrEndianness.LittleEndian);
+        var data = ParticipantDataSerializer.Read(ref r);
+
+        data.ProtocolVersion.Should().Be(new ProtocolVersion(2, 5));
+    }
+
+    [Fact]
     public void unknown_must_understand_PID_は拒否される()
     {
         var buf = new byte[256];
