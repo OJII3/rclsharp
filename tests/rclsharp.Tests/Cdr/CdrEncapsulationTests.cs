@@ -25,7 +25,7 @@ public class CdrEncapsulationTests
     }
 
     [Fact]
-    public void GetEndianness_は_最下位ビットで判定する()
+    public void GetEndianness_は_supported_kind_の_endianness_を返す()
     {
         CdrEncapsulation.GetEndianness(0x0000).Should().Be(CdrEndianness.BigEndian);
         CdrEncapsulation.GetEndianness(0x0001).Should().Be(CdrEndianness.LittleEndian);
@@ -34,12 +34,43 @@ public class CdrEncapsulationTests
     }
 
     [Fact]
-    public void IsParameterList_は_2bit目で判定する()
+    public void GetEndianness_は_unsupported_kind_を_exact_value_で拒否する()
+    {
+        var act = () => CdrEncapsulation.GetEndianness(0x0007);
+        act.Should()
+            .Throw<NotSupportedException>()
+            .WithMessage("*0x0007*");
+    }
+
+    [Fact]
+    public void IsSupported_は_supported_kind_だけ_true()
+    {
+        CdrEncapsulation.IsSupported(0x0000).Should().BeTrue();
+        CdrEncapsulation.IsSupported(0x0001).Should().BeTrue();
+        CdrEncapsulation.IsSupported(0x0002).Should().BeTrue();
+        CdrEncapsulation.IsSupported(0x0003).Should().BeTrue();
+        CdrEncapsulation.IsSupported(0x0007).Should().BeFalse();
+    }
+
+    [Fact]
+    public void IsParameterList_は_PL_CDR_の_exact_kind_だけ_true()
     {
         CdrEncapsulation.IsParameterList(0x0000).Should().BeFalse();
         CdrEncapsulation.IsParameterList(0x0001).Should().BeFalse();
         CdrEncapsulation.IsParameterList(0x0002).Should().BeTrue();
         CdrEncapsulation.IsParameterList(0x0003).Should().BeTrue();
+        CdrEncapsulation.IsParameterList(0x0006).Should().BeFalse();
+        CdrEncapsulation.IsParameterList(0x0007).Should().BeFalse();
+    }
+
+    [Fact]
+    public void IsPlainCdr_は_Plain_CDR_の_exact_kind_だけ_true()
+    {
+        CdrEncapsulation.IsPlainCdr(0x0000).Should().BeTrue();
+        CdrEncapsulation.IsPlainCdr(0x0001).Should().BeTrue();
+        CdrEncapsulation.IsPlainCdr(0x0002).Should().BeFalse();
+        CdrEncapsulation.IsPlainCdr(0x0003).Should().BeFalse();
+        CdrEncapsulation.IsPlainCdr(0x0005).Should().BeFalse();
     }
 
     [Fact]

@@ -90,7 +90,7 @@ public static class ParticipantDataSerializer
 
     /// <summary>
     /// PL_CDR ParameterList を読み出して <see cref="ParticipantData"/> を生成する。
-    /// 未知 PID はスキップ (ParameterListReader が自動で進める)。
+    /// 未知 PID はスキップする。ただし must-understand PID は拒否する。
     /// </summary>
     public static ParticipantData Read(ref CdrReader reader)
     {
@@ -156,7 +156,7 @@ public static class ParticipantDataSerializer
                     break;
 
                 default:
-                    // 未知 PID は MoveNext が次へ進める際に自動スキップ
+                    ParameterId.ThrowIfUnknownMustUnderstand(pid);
                     break;
             }
         }

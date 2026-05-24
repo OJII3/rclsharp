@@ -280,7 +280,7 @@ public static class DiscoveredEndpointDataSerializer
                         break;
                     }
                 default:
-                    // 未知 PID は MoveNext が次へ進める際に自動スキップ
+                    ParameterId.ThrowIfUnknownMustUnderstand(pid);
                     break;
             }
         }

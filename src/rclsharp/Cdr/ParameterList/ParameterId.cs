@@ -74,6 +74,7 @@ public static class ParameterId
     /// 0x8000 以上は実装ベンダ固有として扱う。受信側は不明な PID をスキップしてよい。
     /// </summary>
     public const ushort VendorSpecificStart = 0x8000;
+    public const ushort VendorSpecificFlag = 0x8000;
 
     /// <summary>
     /// 必須フラグ (0x4000)。set されている場合は受信側が解釈できないと拒否すべき。
@@ -81,9 +82,20 @@ public static class ParameterId
     /// </summary>
     public const ushort MustUnderstandFlag = 0x4000;
 
-    public static bool IsVendorSpecific(ushort pid) => (pid & 0x8000) != 0;
+    public static bool IsVendorSpecific(ushort pid) => (pid & VendorSpecificFlag) != 0;
     public static bool IsMustUnderstand(ushort pid) => (pid & MustUnderstandFlag) != 0;
 
-    /// <summary>MustUnderstand ビットを除いたベース PID を返す。</summary>
-    public static ushort StripFlags(ushort pid) => (ushort)(pid & 0x3FFF);
+    /// <summary>
+    /// MustUnderstand ビットだけを除いた PID を返す。
+    /// Vendor-specific ビットは PID の同一性なので保持し、標準 PID と衝突させない。
+    /// </summary>
+    public static ushort StripFlags(ushort pid) => (ushort)(pid & ~MustUnderstandFlag);
+
+    public static void ThrowIfUnknownMustUnderstand(ushort pid)
+    {
+        if (IsMustUnderstand(pid))
+        {
+            throw new InvalidDataException($"Unknown must-understand PID 0x{pid:X4}.");
+        }
+    }
 }
