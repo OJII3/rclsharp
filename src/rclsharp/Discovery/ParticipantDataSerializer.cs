@@ -90,7 +90,7 @@ public static class ParticipantDataSerializer
 
     /// <summary>
     /// PL_CDR ParameterList を読み出して <see cref="ParticipantData"/> を生成する。
-    /// 未知 PID はスキップ (ParameterListReader が自動で進める)。
+    /// 未知 PID はスキップする。ただし must-understand PID は拒否する。
     /// </summary>
     public static ParticipantData Read(ref CdrReader reader)
     {
@@ -155,8 +155,13 @@ public static class ParticipantDataSerializer
                     data.EntityName = pl.ReadString();
                     break;
 
+                case ParameterId.DomainTagBase:
+                    // PID_DOMAIN_TAG is a known DDSI-RTPS 2.5 must-understand PID.
+                    // rclsharp does not use it for matching yet, but it must not make SPDP fail.
+                    break;
+
                 default:
-                    // 未知 PID は MoveNext が次へ進める際に自動スキップ
+                    ParameterId.ThrowIfUnknownMustUnderstand(pid);
                     break;
             }
         }

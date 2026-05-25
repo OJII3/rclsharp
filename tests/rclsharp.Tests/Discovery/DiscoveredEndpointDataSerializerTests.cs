@@ -1,4 +1,5 @@
 using Rclsharp.Cdr;
+using Rclsharp.Cdr.ParameterList;
 using Rclsharp.Common;
 using Rclsharp.Dds.QoS;
 using Rclsharp.Discovery;
@@ -23,6 +24,12 @@ public class DiscoveredEndpointDataSerializerTests
             Reliability = ReliabilityQos.BestEffort,
             Durability = DurabilityQos.Volatile,
         };
+    }
+
+    private static DiscoveredEndpointData ReadEndpointData(byte[] buffer, int length)
+    {
+        var r = new CdrReader(buffer.AsSpan(0, length), CdrEndianness.LittleEndian);
+        return DiscoveredEndpointDataSerializer.Read(ref r, EndpointKind.Writer);
     }
 
     [Theory]
@@ -137,5 +144,54 @@ public class DiscoveredEndpointDataSerializerTests
         var read = DiscoveredEndpointDataSerializer.Read(ref r, EndpointKind.Writer);
         read.EndpointGuid.Should().Be(src.EndpointGuid);
         read.TopicName.Should().Be(src.TopicName);
+    }
+
+    [Fact]
+    public void vendor_specific_PID_は_標準_endpoint_PID_として解釈されない()
+    {
+        var src = MakeWriter();
+        var endpointGuidBytes = new byte[Guid.Size];
+        src.EndpointGuid.WriteTo(endpointGuidBytes);
+        var vendorGuidBytes = Enumerable.Repeat((byte)0xAA, Guid.Size).ToArray();
+
+        var buf = new byte[256];
+        var w = new CdrWriter(buf, CdrEndianness.LittleEndian);
+        var pl = new ParameterListWriter(w);
+
+        pl.BeginParameter(ParameterId.EndpointGuid);
+        pl.WriteRawBytes(endpointGuidBytes);
+        pl.EndParameter();
+
+        pl.BeginParameter((ushort)(ParameterId.VendorSpecificFlag | ParameterId.EndpointGuid));
+        pl.WriteRawBytes(vendorGuidBytes);
+        pl.EndParameter();
+
+        pl.WriteSentinel();
+        w = pl.CurrentWriter;
+
+        var r = new CdrReader(buf.AsSpan(0, w.Position), CdrEndianness.LittleEndian);
+        var read = DiscoveredEndpointDataSerializer.Read(ref r, EndpointKind.Writer);
+
+        read.EndpointGuid.Should().Be(src.EndpointGuid);
+    }
+
+    [Fact]
+    public void unknown_must_understand_PID_は拒否される()
+    {
+        var buf = new byte[256];
+        var w = new CdrWriter(buf, CdrEndianness.LittleEndian);
+        var pl = new ParameterListWriter(w);
+        pl.BeginParameter(0x4242);
+        pl.WriteUInt32(0xDEADBEEFu);
+        pl.EndParameter();
+        pl.WriteSentinel();
+        w = pl.CurrentWriter;
+        int total = w.Position;
+
+        var act = () => ReadEndpointData(buf, total);
+
+        act.Should()
+            .Throw<InvalidDataException>()
+            .WithMessage("*0x4242*");
     }
 }

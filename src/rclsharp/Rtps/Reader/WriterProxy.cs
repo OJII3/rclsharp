@@ -17,23 +17,48 @@ public sealed class WriterProxy
     private readonly HashSet<long> _received = new();
     private long _firstAvailable = 1;   // HB.firstSN
     private long _lastAvailable = 0;    // HB.lastSN
+    private Locator? _unicastReplyLocator;
     private int _ackNackCount;
 
     public Guid WriterGuid { get; }
 
     /// <summary>送信元 Participant のメタトラフィック unicast Locator (ACKNACK 返送先)。</summary>
-    public Locator? UnicastReplyLocator { get; }
+    public Locator? UnicastReplyLocator
+    {
+        get { lock (_lock) { return _unicastReplyLocator; } }
+    }
 
     public WriterProxy(Guid writerGuid, Locator? unicastReplyLocator = null)
     {
         WriterGuid = writerGuid;
-        UnicastReplyLocator = unicastReplyLocator;
+        _unicastReplyLocator = unicastReplyLocator;
+    }
+
+    public void UpdateUnicastReplyLocator(Locator? unicastReplyLocator)
+    {
+        lock (_lock) { _unicastReplyLocator = unicastReplyLocator; }
     }
 
     /// <summary>新規受信なら true、重複なら false を返す。</summary>
     public bool MarkReceived(SequenceNumber sn)
     {
         lock (_lock) { return _received.Add(sn.Value); }
+    }
+
+    /// <summary>Writer から GAP として通知された SN を、今後要求しないものとして扱う。</summary>
+    public void MarkGap(SequenceNumber gapStart, SequenceNumberSet gapList)
+    {
+        lock (_lock)
+        {
+            for (long sn = gapStart.Value; sn < gapList.BitmapBase.Value; sn++)
+            {
+                _received.Add(sn);
+            }
+            foreach (var sn in gapList.EnumerateSet())
+            {
+                _received.Add(sn.Value);
+            }
+        }
     }
 
     /// <summary>HEARTBEAT で通知された SN 範囲を保存する。</summary>

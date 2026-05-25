@@ -31,12 +31,24 @@ public static class CdrEncapsulation
     public static ushort ParameterListCdr(CdrEndianness endianness)
         => endianness == CdrEndianness.LittleEndian ? PlCdrLittleEndian : PlCdrBigEndian;
 
-    /// <summary>kind 値から Plain/PL_CDR の Endianness を判定する。</summary>
+    /// <summary>kind 値からサポート済み CDR/PL_CDR の Endianness を判定する。</summary>
     public static CdrEndianness GetEndianness(ushort kind)
-        => (kind & 0x0001) == 0 ? CdrEndianness.BigEndian : CdrEndianness.LittleEndian;
+        => kind switch
+        {
+            CdrBigEndian or PlCdrBigEndian => CdrEndianness.BigEndian,
+            CdrLittleEndian or PlCdrLittleEndian => CdrEndianness.LittleEndian,
+            _ => throw new NotSupportedException($"Unsupported CDR encapsulation kind 0x{kind:X4}."),
+        };
+
+    /// <summary>kind 値がサポート済み CDR/PL_CDR かどうか。</summary>
+    public static bool IsSupported(ushort kind)
+        => kind is CdrBigEndian or CdrLittleEndian or PlCdrBigEndian or PlCdrLittleEndian;
+
+    /// <summary>kind 値が Plain CDR かどうか。</summary>
+    public static bool IsPlainCdr(ushort kind) => kind is CdrBigEndian or CdrLittleEndian;
 
     /// <summary>kind 値が Parameter List CDR かどうか。</summary>
-    public static bool IsParameterList(ushort kind) => (kind & 0x0002) != 0;
+    public static bool IsParameterList(ushort kind) => kind is PlCdrBigEndian or PlCdrLittleEndian;
 
     /// <summary>カプセルヘッダを書き込む。kind/options は常にビッグエンディアン。</summary>
     public static void Write(Span<byte> destination, ushort kind, ushort options = 0)

@@ -1,5 +1,6 @@
 using System.Net;
 using Rclsharp.Cdr;
+using Rclsharp.Cdr.ParameterList;
 using Rclsharp.Common;
 using Rclsharp.Discovery;
 
@@ -25,6 +26,12 @@ public class ParticipantDataSerializerTests
         data.MetatrafficUnicastLocators.Add(Locator.FromUdpV4(IPAddress.Parse("192.168.1.10"), 7411u));
         data.MetatrafficMulticastLocators.Add(Locator.FromUdpV4(IPAddress.Parse("239.255.0.1"), 7400u));
         return data;
+    }
+
+    private static ParticipantData ReadParticipantData(byte[] buffer, int length)
+    {
+        var r = new CdrReader(buffer.AsSpan(0, length), CdrEndianness.LittleEndian);
+        return ParticipantDataSerializer.Read(ref r);
     }
 
     [Fact]
@@ -87,11 +94,11 @@ public class ParticipantDataSerializerTests
     [Fact]
     public void 未知_PID_はスキップされる()
     {
-        // PROTOCOL_VERSION の前に未知 PID 0x4242 (length 4) を挟んで構築
+        // PROTOCOL_VERSION の前に must-understand ではない未知 PID 0x0242 (length 4) を挟んで構築
         var buf = new byte[256];
         var w = new CdrWriter(buf, CdrEndianness.LittleEndian);
         // unknown PID
-        w.WriteUInt16(0x4242);
+        w.WriteUInt16(0x0242);
         w.WriteUInt16(4);
         w.WriteUInt32(0xDEADBEEFu);
         // PROTOCOL_VERSION
@@ -109,5 +116,98 @@ public class ParticipantDataSerializerTests
         var r = new CdrReader(buf.AsSpan(0, total), CdrEndianness.LittleEndian);
         var data = ParticipantDataSerializer.Read(ref r);
         data.ProtocolVersion.Should().Be(new ProtocolVersion(2, 7));
+    }
+
+    [Fact]
+    public void vendor_specific_PID_は_標準_PID_として解釈されない()
+    {
+        var buf = new byte[256];
+        var w = new CdrWriter(buf, CdrEndianness.LittleEndian);
+
+        w.WriteUInt16(ParameterId.ProtocolVersion);
+        w.WriteUInt16(4);
+        w.WriteByte(2);
+        w.WriteByte(7);
+        w.WriteByte(0);
+        w.WriteByte(0);
+
+        w.WriteUInt16((ushort)(ParameterId.VendorSpecificFlag | ParameterId.ProtocolVersion));
+        w.WriteUInt16(4);
+        w.WriteByte(9);
+        w.WriteByte(9);
+        w.WriteByte(0);
+        w.WriteByte(0);
+
+        w.WriteUInt16(ParameterId.Sentinel);
+        w.WriteUInt16(0);
+        int total = w.Position;
+
+        var r = new CdrReader(buf.AsSpan(0, total), CdrEndianness.LittleEndian);
+        var data = ParticipantDataSerializer.Read(ref r);
+        data.ProtocolVersion.Should().Be(new ProtocolVersion(2, 7));
+    }
+
+    [Fact]
+    public void 既知_must_understand_PID_は標準_PID_として解釈される()
+    {
+        var buf = new byte[256];
+        var w = new CdrWriter(buf, CdrEndianness.LittleEndian);
+        w.WriteUInt16((ushort)(ParameterId.MustUnderstandFlag | ParameterId.ProtocolVersion));
+        w.WriteUInt16(4);
+        w.WriteByte(2);
+        w.WriteByte(7);
+        w.WriteByte(0);
+        w.WriteByte(0);
+        w.WriteUInt16(ParameterId.Sentinel);
+        w.WriteUInt16(0);
+        int total = w.Position;
+
+        var r = new CdrReader(buf.AsSpan(0, total), CdrEndianness.LittleEndian);
+        var data = ParticipantDataSerializer.Read(ref r);
+        data.ProtocolVersion.Should().Be(new ProtocolVersion(2, 7));
+    }
+
+    [Fact]
+    public void PID_DOMAIN_TAG_は既知_must_understand_PID_としてスキップされる()
+    {
+        var buf = new byte[256];
+        var w = new CdrWriter(buf, CdrEndianness.LittleEndian);
+        var pl = new ParameterListWriter(w);
+
+        pl.BeginParameter(ParameterId.DomainTag);
+        pl.WriteString("");
+        pl.EndParameter();
+
+        pl.BeginParameter(ParameterId.ProtocolVersion);
+        pl.WriteByte(2);
+        pl.WriteByte(5);
+        pl.EndParameter();
+
+        pl.WriteSentinel();
+        var serialized = buf[..pl.CurrentWriter.Position].ToArray();
+
+        var r = new CdrReader(serialized, CdrEndianness.LittleEndian);
+        var data = ParticipantDataSerializer.Read(ref r);
+
+        data.ProtocolVersion.Should().Be(new ProtocolVersion(2, 5));
+    }
+
+    [Fact]
+    public void unknown_must_understand_PID_は拒否される()
+    {
+        var buf = new byte[256];
+        var w = new CdrWriter(buf, CdrEndianness.LittleEndian);
+        w.WriteUInt16(0x4242);
+        w.WriteUInt16(4);
+        w.WriteUInt32(0xDEADBEEFu);
+        w.WriteUInt16(ParameterId.Sentinel);
+        w.WriteUInt16(0);
+        int total = w.Position;
+
+        var act = () => ReadParticipantData(buf, total);
+
+        act.Should()
+            .Throw<InvalidDataException>()
+            .WithMessage("*0x4242*");
     }
 }

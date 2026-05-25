@@ -13,6 +13,8 @@ public class ParameterListTests
         ParameterId.VendorId.Should().Be((ushort)0x0016);
         ParameterId.ParticipantGuid.Should().Be((ushort)0x0050);
         ParameterId.BuiltinEndpointSet.Should().Be((ushort)0x0058);
+        ParameterId.DomainTag.Should().Be((ushort)0x4014);
+        ParameterId.StripFlags(ParameterId.DomainTag).Should().Be(ParameterId.DomainTagBase);
         ParameterId.KeyHash.Should().Be((ushort)0x0070);
     }
 
@@ -24,6 +26,20 @@ public class ParameterListTests
         ParameterId.IsMustUnderstand(0x4015).Should().BeTrue();
         ParameterId.IsMustUnderstand(0x0015).Should().BeFalse();
         ParameterId.StripFlags(0x4015).Should().Be((ushort)0x0015);
+        ParameterId.StripFlags(0x8015).Should().Be((ushort)0x8015);
+        ParameterId.StripFlags(0xC015).Should().Be((ushort)0x8015);
+    }
+
+    [Fact]
+    public void ThrowIfUnknownMustUnderstand_は_must_understand_PID_だけ拒否する()
+    {
+        var skipUnknown = () => ParameterId.ThrowIfUnknownMustUnderstand(0x0242);
+        skipUnknown.Should().NotThrow();
+
+        var rejectUnknownMustUnderstand = () => ParameterId.ThrowIfUnknownMustUnderstand(0x4242);
+        rejectUnknownMustUnderstand.Should()
+            .Throw<InvalidDataException>()
+            .WithMessage("*0x4242*");
     }
 
     [Fact]
