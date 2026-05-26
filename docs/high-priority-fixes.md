@@ -24,6 +24,20 @@
    - unknown must-understand PID は silent skip しない。
    - unsupported encapsulation kind は明示的に拒否する。
 
+5. Unity lifecycle と長時間実行で残る background 処理を止める。
+   - core は Unity 依存を持たないため、UniTask へ全面置換しない。
+   - core の非同期処理は `Task` / `ValueTask` と `CancellationToken` で停止可能にし、
+     Unity 側は `SynchronizationContext` や dispatcher adapter からメインスレッドへ配送する。
+   - `DomainParticipant.Stop()` は participant が作成した user endpoint の writer loop も停止する。
+   - fire-and-forget の送信処理は owner の停止 token を渡し、例外をログに残す。
+   - Dispose 後の reader/writer entrypoint は no-op にする。
+
+6. 外部入力でメモリと CPU が膨らむ RTPS state を制限する。
+   - reliable reader の受信済み sequence number は sliding window と highest contiguous で管理する。
+   - GAP の範囲処理は heartbeat window 内に制限し、巨大範囲を個別 SN として追加しない。
+   - DATA_FRAG 再構成は sample 数だけでなく総 byte 数も制限する。
+   - SEDP writer history は endpoint key ごとの最新状態へ compact し、無制限に保持しない。
+
 ## テスト方針
 
 - 変更ごとに、失敗シナリオを先に表すテストを追加する。
