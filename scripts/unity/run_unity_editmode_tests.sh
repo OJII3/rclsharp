@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROJECT_PATH="${UNITY_PROJECT_PATH:-$ROOT_DIR/Ros2Unity}"
 ARTIFACT_DIR="$ROOT_DIR/artifacts/unity"
 UNITY_EDITOR="${UNITY_EDITOR:-}"
+UNITY_USE_TEMP_PROJECT="${UNITY_USE_TEMP_PROJECT:-0}"
+TMP_ROOT=""
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   cat <<'USAGE'
@@ -13,6 +15,8 @@ Usage: scripts/unity/run_unity_editmode_tests.sh
 Environment:
   UNITY_EDITOR        Unity executable path.
   UNITY_PROJECT_PATH  Project path. Defaults to ./Ros2Unity.
+  UNITY_USE_TEMP_PROJECT
+                      Set to 1 to run tests from a temporary project copy.
 USAGE
   exit 0
 fi
@@ -35,6 +39,23 @@ fi
 
 mkdir -p "$ARTIFACT_DIR"
 
+if [[ "$UNITY_USE_TEMP_PROJECT" == "1" ]]; then
+  TMP_ROOT="$(mktemp -d /tmp/rclsharp-unity-verify.XXXXXX)"
+  mkdir -p "$TMP_ROOT/src"
+  rsync -a --delete \
+    --exclude Library \
+    --exclude Temp \
+    --exclude Logs \
+    --exclude UserSettings \
+    "$ROOT_DIR/Ros2Unity" "$TMP_ROOT/"
+  rsync -a --delete \
+    --exclude bin \
+    --exclude obj \
+    "$ROOT_DIR/src/rclsharp" "$TMP_ROOT/src/"
+  PROJECT_PATH="$TMP_ROOT/Ros2Unity"
+  trap 'rm -rf "$TMP_ROOT"' EXIT
+fi
+
 "$UNITY_EDITOR" \
   -batchmode \
   -nographics \
@@ -42,5 +63,4 @@ mkdir -p "$ARTIFACT_DIR"
   -runTests \
   -testPlatform EditMode \
   -testResults "$ARTIFACT_DIR/editmode-results.xml" \
-  -logFile "$ARTIFACT_DIR/unity-editmode.log" \
-  -quit
+  -logFile "$ARTIFACT_DIR/unity-editmode.log"

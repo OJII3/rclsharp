@@ -15,7 +15,7 @@
 
 計測対象:
 
-- Unity package import: `Ros2Unity/Packages/manifest.json` から `../src/rclsharp` を参照する。
+- Unity package import: `Ros2Unity/Packages/manifest.json` から `../../src/rclsharp` を参照する。
 - Smoke: 2 つの `DomainParticipant` 間で `StringMessage` を複数件送受信し、順序と件数を確認する。
 - Performance: warmup 後に複数メッセージを publish し、受信完了までの経過時間、messages/sec、managed heap delta、Unity allocated memory delta、Unity mono used memory delta を記録する。
 
@@ -43,6 +43,12 @@ UNITY_EDITOR=/Applications/Unity/Hub/Editor/6000.3.7f1/Unity.app/Contents/MacOS/
 ```
 
 `Ros2Unity` を Unity Editor で開いている間は、Unity の制約で同じ project path を batchmode から開けない。その場合は Editor を閉じるか、検証用に複製した project path を `UNITY_PROJECT_PATH` で指定する。
+
+同じ処理をスクリプト側で行う場合:
+
+```sh
+UNITY_USE_TEMP_PROJECT=1 scripts/unity/run_unity_editmode_tests.sh
+```
 
 出力先:
 
