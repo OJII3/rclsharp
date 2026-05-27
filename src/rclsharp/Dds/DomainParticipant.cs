@@ -802,7 +802,8 @@ public sealed class DomainParticipant : IDisposable
             handler,
             UnregisterLocalReader,
             handlerContext,
-            _options.Logger);
+            _options.Logger,
+            cdrReadLimits: _options.CdrReadLimits);
     }
 
     /// <summary>ハンドラが GuidPrefix を必要としない場合のショートカット。</summary>

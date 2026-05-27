@@ -5,12 +5,14 @@ namespace Rclsharp.Cdr;
 /// </summary>
 public sealed class CdrReadLimits
 {
+    public const int DefaultMaxUserPayloadBytes = 16 * 1024 * 1024;
+
     public static readonly CdrReadLimits Default = new();
 
     public CdrReadLimits(
-        int maxStringBytes = 1024 * 1024,
-        int maxSequenceElements = 1024 * 1024,
-        int maxSequenceBytes = 16 * 1024 * 1024)
+        int maxStringBytes = DefaultMaxUserPayloadBytes,
+        int maxSequenceElements = DefaultMaxUserPayloadBytes,
+        int maxSequenceBytes = DefaultMaxUserPayloadBytes)
     {
         if (maxStringBytes <= 0)
         {

@@ -19,6 +19,7 @@ public sealed class Subscription<T> : IDisposable
     private readonly Action<Guid, StatelessReader>? _unregisterEndpoint;
     private readonly SynchronizationContext? _handlerContext;
     private readonly ILogger _logger;
+    private readonly CdrReadLimits _cdrReadLimits;
     private bool _disposed;
 
     public string TopicName { get; }
@@ -34,7 +35,8 @@ public sealed class Subscription<T> : IDisposable
         Action<Guid, StatelessReader>? unregisterEndpoint = null,
         SynchronizationContext? handlerContext = null,
         ILogger? logger = null,
-        bool autoStart = true)
+        bool autoStart = true,
+        CdrReadLimits? cdrReadLimits = null)
     {
         TopicName = topicName;
         Guid = guid;
@@ -44,6 +46,7 @@ public sealed class Subscription<T> : IDisposable
         _unregisterEndpoint = unregisterEndpoint;
         _handlerContext = handlerContext;
         _logger = logger ?? NullLogger.Instance;
+        _cdrReadLimits = cdrReadLimits ?? CdrReadLimits.Default;
         _reader.PayloadReceived += OnPayloadReceived;
         if (autoStart)
         {
@@ -106,7 +109,7 @@ public sealed class Subscription<T> : IDisposable
         }
         var (kind, _) = CdrEncapsulation.Read(payload[..CdrEncapsulation.Size]);
         var endian = CdrEncapsulation.GetEndianness(kind);
-        var r = new CdrReader(payload, endian, cdrOrigin: CdrEncapsulation.Size);
+        var r = new CdrReader(payload, endian, cdrOrigin: CdrEncapsulation.Size, limits: _cdrReadLimits);
         _serializer.Deserialize(ref r, out var value);
         return value;
     }
