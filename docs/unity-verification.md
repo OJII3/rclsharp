@@ -99,15 +99,4 @@ Leak guard は throughput と違い、反復後に full GC を挟んだ retained
 - `rclsharp.leak.managed_heap_retained_bytes`
 - `rclsharp.leak.unity_mono_used_retained_bytes`
 - `rclsharp.leak.unity_total_allocated_delta_bytes`
-
-## Unity 公式 MCP
-
-参考: [Get started with Unity MCP](https://docs.unity3d.com/Packages/com.unity.ai.assistant@2.9/manual/integration/unity-mcp-get-started.html)
-
-Unity 公式 MCP は Unity Assistant パッケージ (`com.unity.ai.assistant`) から提供されるため、`Ros2Unity/Packages/manifest.json` にプロジェクト依存として追加している。グローバルな Codex 設定には追加せず、リポジトリ内の `.codex/config.toml` と `.mcp.json` に MCP server 設定だけを置く。
-
-使う前に Unity Editor で `Ros2Unity` を開き、`Edit > Project Settings > AI > Unity MCP Server` の `Unity Bridge` が `Running` になっていることを確認する。Unity は起動時に relay binary を `~/.unity/relay/` へ配置し、MCP client はその binary を `--mcp` 付きで起動する。
-
-このリポジトリの設定は `scripts/unity/unity_mcp_relay.sh` を起動し、スクリプト内で `--project-path <repo>/Ros2Unity` を付けて公式 relay を呼び出す。複数の Unity Editor が起動していても、このプロジェクトの Editor instance へ接続するため。
-
-relay path を明示的に差し替える場合は `UNITY_MCP_RELAY`、接続先プロジェクトを差し替える場合は `UNITY_PROJECT_PATH` を環境変数で指定する。
+ 
