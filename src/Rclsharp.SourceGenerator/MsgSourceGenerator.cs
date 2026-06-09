@@ -1,9 +1,12 @@
 using System;
+using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Text;
 using Rclsharp.MsgGen.Emitting;
+using Rclsharp.MsgGen.Model;
 using Rclsharp.MsgGen.Parsing;
 using Rclsharp.MsgGen.TypeMapping;
 
@@ -45,30 +48,49 @@ public sealed class MsgSourceGenerator : IIncrementalGenerator
                 options.TryGetValue("build_metadata.AdditionalFiles.RclsharpMsgPackage", out string? package);
                 string text = file.GetText(ct)?.ToString() ?? string.Empty;
                 return new MsgInput(file.Path, package, text);
-            });
+            })
+            .Collect();
 
-        context.RegisterSourceOutput(inputs, Generate);
+        // 全 .msg をまとめて処理し、ネスト型のサイズ/整列を正確に解決するためのレジストリを構築する。
+        context.RegisterSourceOutput(inputs, GenerateAll);
     }
 
-    private static void Generate(SourceProductionContext context, MsgInput input)
+    private static void GenerateAll(SourceProductionContext context, ImmutableArray<MsgInput> inputs)
     {
-        string name = Path.GetFileNameWithoutExtension(input.Path);
-        string package = !string.IsNullOrEmpty(input.Package)
-            ? input.Package!
-            : InferPackage(input.Path);
+        var resolver = new TypeNameResolver();
+        var parsed = new List<(MsgInput input, string package, string name, MessageDefinition def)>();
 
-        try
+        foreach (var input in inputs)
         {
-            var resolver = new TypeNameResolver();
-            var def = MsgParser.Parse(package, name, input.Text);
-            string code = new CSharpEmitter(resolver).Emit(def);
-
-            string hint = $"{package}_{resolver.CSharpTypeName(package, name)}.g.cs";
-            context.AddSource(hint, SourceText.From(code, Encoding.UTF8));
+            string name = Path.GetFileNameWithoutExtension(input.Path);
+            string package = !string.IsNullOrEmpty(input.Package) ? input.Package! : InferPackage(input.Path);
+            try
+            {
+                var def = MsgParser.Parse(package, name, input.Text);
+                parsed.Add((input, package, name, def));
+            }
+            catch (Exception ex)
+            {
+                context.ReportDiagnostic(Diagnostic.Create(ParseError, Location.None, ex.Message));
+            }
         }
-        catch (Exception ex)
+
+        var registry = new MessageRegistry();
+        foreach (var p in parsed) registry.Add(p.def);
+        var emitter = new CSharpEmitter(resolver, registry);
+
+        foreach (var p in parsed)
         {
-            context.ReportDiagnostic(Diagnostic.Create(ParseError, Location.None, ex.Message));
+            try
+            {
+                string code = emitter.Emit(p.def);
+                string hint = $"{p.package}_{resolver.CSharpTypeName(p.package, p.name)}.g.cs";
+                context.AddSource(hint, SourceText.From(code, Encoding.UTF8));
+            }
+            catch (Exception ex)
+            {
+                context.ReportDiagnostic(Diagnostic.Create(ParseError, Location.None, ex.Message));
+            }
         }
     }
 

@@ -36,6 +36,7 @@ public sealed class UInt64MultiArraySerializer : ICdrSerializer<UInt64MultiArray
     {
         int total = 0;
         total += MultiArrayLayoutSerializer.Instance.GetSerializedSize(in value.Layout);
+        total += 3;
         total += 4;
         total += (value.Data is null ? 0 : value.Data.Length) * 8;
         return total;

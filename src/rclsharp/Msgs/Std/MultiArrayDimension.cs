@@ -39,8 +39,9 @@ public sealed class MultiArrayDimensionSerializer : ICdrSerializer<MultiArrayDim
         int total = 0;
         int lenLabel = value.Label is null ? 0 : System.Text.Encoding.UTF8.GetByteCount(value.Label);
         total += 4 + lenLabel + 1;
-        total += 7;
+        total += 3;
         total += 4;
+        total += 3;
         total += 4;
         return total;
     }

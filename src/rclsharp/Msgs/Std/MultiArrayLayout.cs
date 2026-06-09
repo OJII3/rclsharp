@@ -44,7 +44,7 @@ public sealed class MultiArrayLayoutSerializer : ICdrSerializer<MultiArrayLayout
                 total += serDim.GetSerializedSize(in eDim);
             }
         }
-        total += 7;
+        total += 3;
         total += 4;
         return total;
     }

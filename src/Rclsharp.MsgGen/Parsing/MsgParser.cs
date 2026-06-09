@@ -142,6 +142,12 @@ public static class MsgParser
             baseToken = head;
         }
 
+        // wstring は CDR 上 UTF-16 で string (UTF-8) と wire が異なるため未対応。
+        if (baseToken == "wstring")
+        {
+            throw new MsgParseException($"{messageName}.msg:{lineNo}: wstring は未対応です");
+        }
+
         if (IsStringType(baseToken))
         {
             return new FieldType(BaseTypeCategory.String, null, null, null, stringBound, arrayKind, arrayLength);
@@ -181,7 +187,7 @@ public static class MsgParser
         return new FieldType(BaseTypeCategory.Named, null, pkg, typeName, null, arrayKind, arrayLength);
     }
 
-    private static bool IsStringType(string token) => token == "string" || token == "wstring";
+    private static bool IsStringType(string token) => token == "string";
 
     private static int ParseLength(string s, string messageName, int lineNo)
     {

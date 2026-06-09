@@ -1,5 +1,7 @@
 using System.IO;
+using System.Text;
 using Rclsharp.MsgGen.Emitting;
+using Rclsharp.MsgGen.Model;
 using Rclsharp.MsgGen.Parsing;
 using Rclsharp.MsgGen.TypeMapping;
 
@@ -12,42 +14,44 @@ namespace Rclsharp.Tests.MsgGen;
 /// </summary>
 public class GeneratedCodeDriftTests
 {
-    public static IEnumerable<object[]> MsgFiles()
+    [Fact]
+    public void 生成コードはコミット済みと一致する()
     {
         string root = RepoRoot();
         string msgsDir = Path.Combine(root, "msgs");
+        var resolver = new TypeNameResolver();
+
+        // CLI と同じく全 .msg を解析してレジストリを構築してから生成する。
+        var parsed = new List<(string package, string name, MessageDefinition def)>();
         foreach (var file in Directory.GetFiles(msgsDir, "*.msg", SearchOption.AllDirectories))
         {
-            yield return new object[] { file };
+            string msgDir = Path.GetDirectoryName(file)!;
+            string package = Path.GetFileName(Path.GetDirectoryName(msgDir)!);
+            string name = Path.GetFileNameWithoutExtension(file);
+            parsed.Add((package, name, MsgParser.Parse(package, name, File.ReadAllText(file))));
         }
-    }
 
-    [Theory]
-    [MemberData(nameof(MsgFiles))]
-    public void 生成コードはコミット済みと一致する(string msgFile)
-    {
-        string root = RepoRoot();
-        var resolver = new TypeNameResolver();
-        var emitter = new CSharpEmitter(resolver);
+        var registry = new MessageRegistry(parsed.ConvertAll(p => p.def));
+        var emitter = new CSharpEmitter(resolver, registry);
 
-        string msgDir = Path.GetDirectoryName(msgFile)!;
-        string package = Path.GetFileName(Path.GetDirectoryName(msgDir)!);
-        string name = Path.GetFileNameWithoutExtension(msgFile);
+        var drifted = new StringBuilder();
+        foreach (var (package, name, def) in parsed)
+        {
+            string generated = emitter.Emit(def);
+            string committedPath = Path.Combine(
+                root, "src", "rclsharp", "Msgs",
+                resolver.SubNamespace(package),
+                resolver.CSharpTypeName(package, name) + ".cs");
 
-        var def = MsgParser.Parse(package, name, File.ReadAllText(msgFile));
-        string generated = emitter.Emit(def);
+            string? committed = File.Exists(committedPath) ? File.ReadAllText(committedPath) : null;
+            if (!string.Equals(committed, generated, StringComparison.Ordinal))
+            {
+                drifted.AppendLine(committedPath);
+            }
+        }
 
-        string committedPath = Path.Combine(
-            root, "src", "rclsharp", "Msgs",
-            resolver.SubNamespace(package),
-            resolver.CSharpTypeName(package, name) + ".cs");
-
-        File.Exists(committedPath).Should().BeTrue($"{committedPath} が存在するはず");
-        string committed = File.ReadAllText(committedPath);
-
-        generated.Should().Be(
-            committed,
-            $"{name}.msg の生成結果が {committedPath} と一致するべき (rclsharp-genmsg を再実行してコミットしてください)");
+        drifted.ToString().Should().BeEmpty(
+            "生成結果がコミット済みと一致するべき (rclsharp-genmsg を再実行してコミットしてください)");
     }
 
     private static string RepoRoot()

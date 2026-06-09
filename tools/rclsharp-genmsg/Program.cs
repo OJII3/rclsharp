@@ -46,14 +46,12 @@ if (!Directory.Exists(input))
 }
 
 var resolver = new TypeNameResolver();
-var emitter = new CSharpEmitter(resolver);
 
 var msgFiles = Directory.GetFiles(input, "*.msg", SearchOption.AllDirectories);
 Array.Sort(msgFiles, StringComparer.Ordinal);
 
-int changed = 0;
-int total = 0;
-
+// 1st pass: 全 .msg を解析してレジストリを構築 (ネスト型のサイズ/整列を正確に解決するため)。
+var parsed = new List<Rclsharp.MsgGen.Model.MessageDefinition>();
 foreach (var file in msgFiles)
 {
     // <input>/<package>/msg/<Name>.msg を想定。
@@ -67,9 +65,20 @@ foreach (var file in msgFiles)
 
     string package = Path.GetFileName(pkgDir);
     string name = Path.GetFileNameWithoutExtension(file);
-    string text = File.ReadAllText(file);
+    parsed.Add(MsgParser.Parse(package, name, File.ReadAllText(file)));
+}
 
-    var def = MsgParser.Parse(package, name, text);
+var registry = new Rclsharp.MsgGen.Model.MessageRegistry(parsed);
+var emitter = new CSharpEmitter(resolver, registry);
+
+int changed = 0;
+int total = 0;
+
+// 2nd pass: 生成して出力。
+foreach (var def in parsed)
+{
+    string package = def.Package;
+    string name = def.Name;
     string code = emitter.Emit(def);
 
     string subNs = resolver.SubNamespace(package);

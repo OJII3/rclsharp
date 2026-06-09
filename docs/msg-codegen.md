@@ -17,6 +17,7 @@ IL2CPP / AOT 互換のため**すべてコンパイル時生成**で、ランタ
 - コメント (`#` 以降)、空行
 - プリミティブ: `bool` `byte` `char` `int8`〜`int64` `uint8`〜`uint64` `float32` `float64` `string`
   - C# 型対応は既存手書き型に一致 (`char`/`int8`→`sbyte`, `byte`/`uint8`→`byte`)
+  - `wstring` は CDR 上 UTF-16 で string (UTF-8) と wire が異なるため**未対応** (解析時にエラー)
 - bounded string: `string<=N` (wire は unbounded と同形、上限は注記のみ)
 - ネスト型: `pkg/Type` または同一パッケージ相対 `Type`
 - 配列: 固定長 `T[N]` / 可変長 `T[]` / 上限付き `T[<=N]`

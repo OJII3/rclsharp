@@ -89,4 +89,14 @@ public class MsgParserTests
         def.Fields.Should().BeEmpty();
         def.Constants.Should().BeEmpty();
     }
+
+    [Theory]
+    [InlineData("wstring w")]
+    [InlineData("wstring<=4 w")]
+    [InlineData("wstring[] w")]
+    public void wstringは未対応として弾く(string line)
+    {
+        Action act = () => MsgParser.Parse("p", "M", line + "\n");
+        act.Should().Throw<MsgParseException>().WithMessage("*wstring*");
+    }
 }

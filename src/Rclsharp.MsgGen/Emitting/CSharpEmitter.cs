@@ -14,10 +14,12 @@ namespace Rclsharp.MsgGen.Emitting;
 public sealed class CSharpEmitter
 {
     private readonly TypeNameResolver _resolver;
+    private readonly TypeMetrics _metrics;
 
-    public CSharpEmitter(TypeNameResolver? resolver = null)
+    public CSharpEmitter(TypeNameResolver? resolver = null, MessageRegistry? registry = null)
     {
         _resolver = resolver ?? new TypeNameResolver();
+        _metrics = new TypeMetrics(registry ?? new MessageRegistry());
     }
 
     /// <summary>1 つの msg 定義を 1 ファイル分の C# ソースに変換する。</summary>
@@ -170,16 +172,40 @@ public sealed class CSharpEmitter
         }
 
         sb.Append("        int total = 0;\n");
-        for (int i = 0; i < def.Fields.Count; i++)
+
+        // CDR の整列パディングを静的に追跡する。位置が確定している間は正確な pad を、
+        // 可変長フィールド以降は後続の整列上限 (align-1) を安全側で見込む。
+        bool positionKnown = true;
+        int knownOffset = 0;
+        foreach (var f in def.Fields)
         {
-            var f = def.Fields[i];
             string pname = NamingConventions.ToPascalCase(f.Name);
-            EmitSizeContribution(sb, f, pname, def.Package);
-            bool isLast = i == def.Fields.Count - 1;
-            if (!isLast && IsVariableLength(f.Type))
+            SizeInfo fi = _metrics.OfField(f.Type, def.Package);
+            int la = fi.LeadingAlignment;
+
+            if (positionKnown)
             {
-                // 後続フィールドのアライメント padding 上限 (8-align で最大 7 バイト) を安全側で見込む。
-                sb.Append("        total += 7;\n");
+                int pad = TypeMetrics.Align(knownOffset, la) - knownOffset;
+                if (pad > 0)
+                {
+                    sb.Append($"        total += {pad};\n");
+                    knownOffset += pad;
+                }
+            }
+            else if (la > 1)
+            {
+                sb.Append($"        total += {la - 1};\n");
+            }
+
+            EmitSizeContribution(sb, f, pname, def.Package);
+
+            if (positionKnown && fi.IsFixed)
+            {
+                knownOffset += fi.FixedSize;
+            }
+            else if (!fi.IsFixed)
+            {
+                positionKnown = false;
             }
         }
         sb.Append("        return total;\n    }\n");
@@ -286,7 +312,9 @@ public sealed class CSharpEmitter
         string arrExpr;
         if (fixedSize)
         {
-            arrExpr = $"value.{pname}";
+            // 固定長配列は常に N 要素。null の場合はゼロ初期化配列で代替し NRE を避ける。
+            sb.Append($"        var {LocalArr(pname)} = value.{pname} ?? new {elem}[{t.ArrayLength}];\n");
+            arrExpr = LocalArr(pname);
         }
         else
         {
@@ -439,17 +467,6 @@ public sealed class CSharpEmitter
         return _resolver.SerializerName(pkg, t.Name!);
     }
 
-    private static bool IsVariableLength(FieldType t)
-    {
-        if (!t.IsArray)
-        {
-            return t.Category == BaseTypeCategory.String;
-        }
-        return t.ArrayKind != ArrayKind.FixedSize
-            || t.Category == BaseTypeCategory.String
-            || t.Category == BaseTypeCategory.Named;
-    }
-
     private static string LenLocal(string pname) => "len" + pname;
     private static string ElemLocal(string pname) => "e" + pname;
     private static string SerLocal(string pname) => "ser" + pname;
@@ -488,7 +505,25 @@ public sealed class CSharpEmitter
             {
                 return raw + "f";
             }
+            // int の既定型は int。範囲外の値でもリテラル型を確定させるためサフィックスを付ける。
+            if (IsIntegerLiteral(raw))
+            {
+                if (p == "uint64") return raw + "UL";
+                if (p == "int64") return raw + "L";
+                if (p == "uint32") return raw + "U";
+            }
         }
         return raw;
+    }
+
+    private static bool IsIntegerLiteral(string s)
+    {
+        int start = s.Length > 0 && (s[0] == '+' || s[0] == '-') ? 1 : 0;
+        if (start >= s.Length) return false;
+        for (int i = start; i < s.Length; i++)
+        {
+            if (!char.IsDigit(s[i])) return false;
+        }
+        return true;
     }
 }
