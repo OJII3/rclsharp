@@ -421,7 +421,7 @@ public sealed class DomainParticipant : IDisposable
         var ddsTopic = TopicNameMangler.MangleTopic(topicName);
         var ddsTypeName = ResolveDdsTypeName<T>(typeName);
         var readerEntityId = _userEntityIds.AllocateReader();
-        var reader = new StatelessReader(readerEntityId, _options.Logger, _options.DataFragReassembly);
+        var reader = new StatelessReader(GuidPrefix, readerEntityId, _options.Logger, _options.DataFragReassembly);
 
         // SEDP 用に登録 (即時 publish)
         var endpointGuid = new Guid(GuidPrefix, readerEntityId);

@@ -20,7 +20,7 @@ namespace ROSettaDDS.Rtps.Writer;
 /// reader proxy の matching は呼び出し側 (DomainParticipant) が <see cref="MatchReader"/> で明示。
 /// </para>
 /// </summary>
-public sealed class StatefulWriter : IDisposable
+public sealed class StatefulWriter : IDisposable, IRtpsSubmessageHandler
 {
     public const int SendBufferSize = 1500;
     public const int DataFragPayloadSize = 1024;
@@ -209,40 +209,46 @@ public sealed class StatefulWriter : IDisposable
     public void OnPacketReceived(ReadOnlyMemory<byte> packet, Locator source)
     {
         if (_disposed) return;
-        try { ProcessPacket(packet.Span); }
+        try { ProcessPacket(packet); }
         catch (Exception ex) { _logger.Warn($"StatefulWriter failed to parse packet from {source}", ex); }
     }
 
-    public void ProcessPacket(ReadOnlySpan<byte> packet)
+    public void ProcessPacket(ReadOnlyMemory<byte> packet)
     {
-        if (!RtpsHeader.TryRead(packet, out _, out _, out var sourcePrefix)) return;
-        var reader = new RtpsMessageReader(packet);
-        while (reader.TryReadNext(out var hdr, out var body))
-        {
-            if (hdr.Kind != SubmessageKind.AckNack) continue;
-            var ack = AckNackSubmessage.ReadBody(body, hdr.Endianness, hdr.Flags);
-            if (!ack.WriterEntityId.Equals(_writerEntityId)) continue;
-
-            // reader 側 EntityId + sourcePrefix で proxy を特定
-            var readerGuid = new Guid(sourcePrefix, ack.ReaderEntityId);
-            ReaderProxy? proxy;
-            lock (_matchedLock) { _matched.TryGetValue(readerGuid, out proxy); }
-            if (proxy is null) continue;
-
-            proxy.ProcessAckNack(ack.ReaderSnState);
-
-            if (_purgeAckedSamples)
-            {
-                // ack 済みサンプルを history から削除 (全 reader の最小 ack を基準)
-                PurgeAckedSamples();
-            }
-
-            // 再送
-            RunBackground(
-                token => ResendRequestedAsync(proxy, token),
-                "StatefulWriter requested resend");
-        }
+        RtpsMessageDispatcher.Dispatch(packet, _localPrefix, this);
     }
+
+    // IRtpsSubmessageHandler 実装
+
+    void IRtpsSubmessageHandler.OnData(in RtpsReceiverContext ctx, DataSubmessage data, CdrEndianness endianness) { }
+    void IRtpsSubmessageHandler.OnDataFrag(in RtpsReceiverContext ctx, DataFragSubmessage dataFrag, CdrEndianness endianness) { }
+    void IRtpsSubmessageHandler.OnHeartbeat(in RtpsReceiverContext ctx, HeartbeatSubmessage hb) { }
+
+    void IRtpsSubmessageHandler.OnAckNack(in RtpsReceiverContext ctx, AckNackSubmessage ack)
+    {
+        if (!ack.WriterEntityId.Equals(_writerEntityId)) return;
+
+        // reader 側 EntityId + sourcePrefix で proxy を特定
+        var readerGuid = new Guid(ctx.SourceGuidPrefix, ack.ReaderEntityId);
+        ReaderProxy? proxy;
+        lock (_matchedLock) { _matched.TryGetValue(readerGuid, out proxy); }
+        if (proxy is null) return;
+
+        proxy.ProcessAckNack(ack.ReaderSnState);
+
+        if (_purgeAckedSamples)
+        {
+            // ack 済みサンプルを history から削除 (全 reader の最小 ack を基準)
+            PurgeAckedSamples();
+        }
+
+        // 再送
+        RunBackground(
+            token => ResendRequestedAsync(proxy, token),
+            "StatefulWriter requested resend");
+    }
+
+    void IRtpsSubmessageHandler.OnGap(in RtpsReceiverContext ctx, GapSubmessage gap) { }
 
     /// <summary>
     /// reliable な matched reader 全員が ack 済みのサンプルを history から削除する。
