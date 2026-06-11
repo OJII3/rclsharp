@@ -31,19 +31,7 @@ public sealed class DomainParticipant : IDisposable
     private readonly SedpEndpointReader _sedpSubscriptionsReader;
     private readonly TimeSpan _leaseExpiryCheckPeriod;
     private readonly UserEntityIdAllocator _userEntityIds = new();
-
-    // ローカル endpoint 一覧 (SEDP 送信時に使用)
-    private readonly object _localEndpointsLock = new();
-    private readonly List<DiscoveredEndpointData> _localWriters = new();
-    private readonly List<DiscoveredEndpointData> _localReaders = new();
-
-    // ローカル StatefulWriter をトピック名でルックアップ (remote reader マッチング用)
-    private readonly Dictionary<string, List<LocalUserWriter>> _localUserWriters = new();
-
-    // ローカル StatelessReader をトピック名でルックアップ (remote writer マッチング用)
-    private readonly Dictionary<string, List<LocalUserReader>> _localUserReaders = new();
-    private StatefulWriter[] _localUserWriterSnapshot = Array.Empty<StatefulWriter>();
-    private StatelessReader[] _localUserReaderSnapshot = Array.Empty<StatelessReader>();
+    private readonly UserEndpointManager _userEndpoints;
 
     private bool _started;
     private bool _disposed;
@@ -65,30 +53,6 @@ public sealed class DomainParticipant : IDisposable
     /// <summary>ユーザートピックの multicast 送信先 Locator。</summary>
     public Locator UserMulticastDestination => _transports.UserMulticastDestination;
 
-    private sealed class LocalUserReader
-    {
-        public LocalUserReader(DiscoveredEndpointData endpointData, StatelessReader reader)
-        {
-            EndpointData = endpointData ?? throw new ArgumentNullException(nameof(endpointData));
-            Reader = reader ?? throw new ArgumentNullException(nameof(reader));
-        }
-
-        public DiscoveredEndpointData EndpointData { get; }
-        public StatelessReader Reader { get; }
-    }
-
-    private sealed class LocalUserWriter
-    {
-        public LocalUserWriter(DiscoveredEndpointData endpointData, StatefulWriter writer)
-        {
-            EndpointData = endpointData ?? throw new ArgumentNullException(nameof(endpointData));
-            Writer = writer ?? throw new ArgumentNullException(nameof(writer));
-        }
-
-        public DiscoveredEndpointData EndpointData { get; }
-        public StatefulWriter Writer { get; }
-    }
-
     public DomainParticipant(DomainParticipantOptions options)
     {
         if (options is null) throw new ArgumentNullException(nameof(options));
@@ -101,6 +65,7 @@ public sealed class DomainParticipant : IDisposable
         _transports = ParticipantTransportSet.Create(_options);
 
         _discoveryDb = new DiscoveryDb(_options.DiscoveryLimits);
+        _userEndpoints = new UserEndpointManager(_discoveryDb, _options.Logger);
 
         _spdpReader = new SpdpBuiltinParticipantReader(
             _transports.MetatrafficMulticast, _discoveryDb, GuidPrefix, _options.Logger, limits: _options.DiscoveryLimits);
@@ -214,40 +179,10 @@ public sealed class DomainParticipant : IDisposable
     }
 
     private void OnRemoteReaderDiscovered(RemoteEndpoint remoteReader)
-    {
-        LocalUserWriter[] writers;
-        lock (_localEndpointsLock)
-        {
-            if (!_localUserWriters.TryGetValue(remoteReader.TopicName, out var list))
-            {
-                return;
-            }
-            writers = list.ToArray();
-        }
-
-        foreach (var local in writers)
-        {
-            MatchLocalWriterWithRemoteReader(local, remoteReader);
-        }
-    }
+        => _userEndpoints.RemoteReaderChanged(remoteReader);
 
     private void OnRemoteWriterDiscovered(RemoteEndpoint remoteWriter)
-    {
-        LocalUserReader[] readers;
-        lock (_localEndpointsLock)
-        {
-            if (!_localUserReaders.TryGetValue(remoteWriter.TopicName, out var list))
-            {
-                return;
-            }
-            readers = list.ToArray();
-        }
-
-        foreach (var local in readers)
-        {
-            MatchLocalReaderWithRemoteWriter(local, remoteWriter);
-        }
-    }
+        => _userEndpoints.RemoteWriterChanged(remoteWriter);
 
     private void OnRemoteEndpointUpdated(RemoteEndpoint remoteEndpoint)
     {
@@ -261,130 +196,14 @@ public sealed class DomainParticipant : IDisposable
         }
     }
 
-    private void MatchLocalWriterWithRemoteReader(LocalUserWriter local, RemoteEndpoint remoteReader)
-    {
-        if (!TypeMatches(local.EndpointData.TypeName, remoteReader.TypeName))
-        {
-            local.Writer.UnmatchReader(remoteReader.Data.EndpointGuid);
-            return;
-        }
-
-        var unicastLocator = ResolveRemoteReaderUnicastLocator(remoteReader);
-        local.Writer.MatchReader(remoteReader.Data.EndpointGuid, unicastLocator);
-        _options.Logger.Debug($"DomainParticipant: matched local writer with remote reader on topic={remoteReader.TopicName} reader={remoteReader.Data.EndpointGuid}");
-    }
-
-    private void MatchLocalReaderWithRemoteWriter(LocalUserReader local, RemoteEndpoint remoteWriter)
-    {
-        if (!TypeMatches(local.EndpointData.TypeName, remoteWriter.TypeName))
-        {
-            local.Reader.UnmatchWriter(remoteWriter.Data.EndpointGuid);
-            return;
-        }
-
-        local.Reader.MatchWriter(remoteWriter.Data.EndpointGuid);
-        _options.Logger.Debug($"DomainParticipant: matched local reader with remote writer on topic={remoteWriter.TopicName} writer={remoteWriter.Data.EndpointGuid}");
-    }
-
-    private void MatchLocalReaderWithLocalWriter(LocalUserReader localReader, LocalUserWriter localWriter)
-    {
-        if (!TypeMatches(localReader.EndpointData.TypeName, localWriter.EndpointData.TypeName))
-        {
-            localReader.Reader.UnmatchWriter(localWriter.EndpointData.EndpointGuid);
-            localWriter.Writer.UnmatchReader(localReader.EndpointData.EndpointGuid);
-            return;
-        }
-
-        localReader.Reader.MatchWriter(localWriter.EndpointData.EndpointGuid);
-        var unicastLocator = FirstUdpLocator(localReader.EndpointData.UnicastLocators);
-        localWriter.Writer.MatchReader(localReader.EndpointData.EndpointGuid, unicastLocator);
-        _options.Logger.Debug($"DomainParticipant: matched local reader with local writer on topic={localReader.EndpointData.TopicName} writer={localWriter.EndpointData.EndpointGuid}");
-    }
-
-    private Locator? ResolveRemoteReaderUnicastLocator(RemoteEndpoint remoteReader)
-    {
-        var unicastLocator = FirstUdpLocator(remoteReader.Data.UnicastLocators);
-        if (unicastLocator is not null)
-        {
-            return unicastLocator;
-        }
-
-        var participants = _discoveryDb.Snapshot();
-        foreach (var p in participants)
-        {
-            if (p.GuidPrefix.Equals(remoteReader.Data.EndpointGuid.Prefix))
-            {
-                return FirstUdpLocator(p.Data.DefaultUnicastLocators);
-            }
-        }
-
-        return null;
-    }
-
     private void OnRemoteReaderLost(RemoteEndpoint remoteReader)
-    {
-        LocalUserWriter[] writers;
-        lock (_localEndpointsLock)
-        {
-            if (!_localUserWriters.TryGetValue(remoteReader.TopicName, out var list))
-            {
-                return;
-            }
-            writers = list.ToArray();
-        }
-        foreach (var local in writers)
-        {
-            local.Writer.UnmatchReader(remoteReader.Data.EndpointGuid);
-        }
-    }
+        => _userEndpoints.RemoteReaderLost(remoteReader);
 
     private void OnRemoteWriterLost(RemoteEndpoint remoteWriter)
-    {
-        LocalUserReader[] readers;
-        lock (_localEndpointsLock)
-        {
-            if (!_localUserReaders.TryGetValue(remoteWriter.TopicName, out var list))
-            {
-                return;
-            }
-            readers = list.ToArray();
-        }
-        foreach (var local in readers)
-        {
-            local.Reader.UnmatchWriter(remoteWriter.Data.EndpointGuid);
-        }
-    }
+        => _userEndpoints.RemoteWriterLost(remoteWriter);
 
     private void OnUserDataPacketReceived(ReadOnlyMemory<byte> packet, Locator source)
-    {
-        var writers = Volatile.Read(ref _localUserWriterSnapshot);
-        var readers = Volatile.Read(ref _localUserReaderSnapshot);
-        foreach (var w in writers)
-        {
-            w.OnPacketReceived(packet, source);
-        }
-        foreach (var r in readers)
-        {
-            r.OnPacketReceived(packet, source);
-        }
-    }
-
-    private static bool TypeMatches(string localTypeName, string remoteTypeName)
-        => !string.IsNullOrEmpty(localTypeName)
-        && !string.IsNullOrEmpty(remoteTypeName)
-        && string.Equals(localTypeName, remoteTypeName, StringComparison.Ordinal);
-
-    private static bool IsUdpLocator(Locator loc)
-        => loc.Kind == LocatorKind.UdpV4 || loc.Kind == LocatorKind.UdpV6;
-
-    private static Locator? FirstUdpLocator(IEnumerable<Locator> locators)
-    {
-        foreach (var loc in locators)
-        {
-            if (IsUdpLocator(loc)) return loc;
-        }
-        return null;
-    }
+        => _userEndpoints.DispatchPacket(packet, source);
 
     /// <summary>送受信トランスポートと SPDP の起動。</summary>
     public void Start()
@@ -413,7 +232,7 @@ public sealed class DomainParticipant : IDisposable
 
         _sedpPublicationsWriter.Start();
         _sedpSubscriptionsWriter.Start();
-        StartLocalUserWriters();
+        _userEndpoints.StartWriters();
         StartLeaseExpiryLoop();
         _started = true;
     }
@@ -426,7 +245,7 @@ public sealed class DomainParticipant : IDisposable
             return;
         }
         StopLeaseExpiryLoop();
-        StopLocalUserWriters();
+        _userEndpoints.StopWriters();
         _sedpPublicationsWriter.Stop();
         _sedpSubscriptionsWriter.Stop();
         _transports.UserMulticast.Received -= OnUserDataPacketReceived;
@@ -441,34 +260,6 @@ public sealed class DomainParticipant : IDisposable
         _spdpReader.Stop();
         _transports.Stop();
         _started = false;
-    }
-
-    private void StartLocalUserWriters()
-    {
-        LocalUserWriter[] writers;
-        lock (_localEndpointsLock)
-        {
-            writers = _localUserWriters.Values.SelectMany(static list => list).ToArray();
-        }
-
-        foreach (var local in writers)
-        {
-            local.Writer.Start();
-        }
-    }
-
-    private void StopLocalUserWriters()
-    {
-        LocalUserWriter[] writers;
-        lock (_localEndpointsLock)
-        {
-            writers = _localUserWriters.Values.SelectMany(static list => list).ToArray();
-        }
-
-        foreach (var local in writers)
-        {
-            local.Writer.Stop();
-        }
     }
 
     private void StartLeaseExpiryLoop()
@@ -593,34 +384,7 @@ public sealed class DomainParticipant : IDisposable
         };
         endpointData.UnicastLocators.Add(_transports.DefaultUnicastLocator);
         endpointData.MulticastLocators.Add(_transports.UserMulticastDestination);
-        var localWriter = new LocalUserWriter(endpointData, writer);
-        LocalUserReader[] localReaders;
-        lock (_localEndpointsLock)
-        {
-            _localWriters.Add(endpointData);
-            if (!_localUserWriters.TryGetValue(ddsTopic, out var writers))
-            {
-                writers = new List<LocalUserWriter>();
-                _localUserWriters[ddsTopic] = writers;
-            }
-            writers.Add(localWriter);
-            RefreshLocalUserEndpointSnapshotsLocked();
-
-            localReaders = _localUserReaders.TryGetValue(ddsTopic, out var readers)
-                ? readers.ToArray()
-                : Array.Empty<LocalUserReader>();
-        }
-        foreach (var localReader in localReaders)
-        {
-            MatchLocalReaderWithLocalWriter(localReader, localWriter);
-        }
-        foreach (var remoteReader in _discoveryDb.ReaderSnapshot())
-        {
-            if (remoteReader.TopicName == ddsTopic)
-            {
-                MatchLocalWriterWithRemoteReader(localWriter, remoteReader);
-            }
-        }
+        _userEndpoints.RegisterWriter(endpointData, writer);
         _ = RunSedpOperationAsync(
             token => _sedpPublicationsWriter.AddEndpointAsync(endpointData, token),
             "DomainParticipant failed to advertise local writer endpoint");
@@ -666,34 +430,7 @@ public sealed class DomainParticipant : IDisposable
         };
         endpointData.UnicastLocators.Add(_transports.DefaultUnicastLocator);
         endpointData.MulticastLocators.Add(_transports.UserMulticastDestination);
-        var localReader = new LocalUserReader(endpointData, reader);
-        LocalUserWriter[] localWriters;
-        lock (_localEndpointsLock)
-        {
-            _localReaders.Add(endpointData);
-            if (!_localUserReaders.TryGetValue(ddsTopic, out var readers))
-            {
-                readers = new List<LocalUserReader>();
-                _localUserReaders[ddsTopic] = readers;
-            }
-            readers.Add(localReader);
-            RefreshLocalUserEndpointSnapshotsLocked();
-
-            localWriters = _localUserWriters.TryGetValue(ddsTopic, out var writers)
-                ? writers.ToArray()
-                : Array.Empty<LocalUserWriter>();
-        }
-        foreach (var localWriter in localWriters)
-        {
-            MatchLocalReaderWithLocalWriter(localReader, localWriter);
-        }
-        foreach (var remoteWriter in _discoveryDb.WriterSnapshot())
-        {
-            if (remoteWriter.TopicName == ddsTopic)
-            {
-                MatchLocalReaderWithRemoteWriter(localReader, remoteWriter);
-            }
-        }
+        _userEndpoints.RegisterReader(endpointData, reader);
         _ = RunSedpOperationAsync(
             token => _sedpSubscriptionsWriter.AddEndpointAsync(endpointData, token),
             "DomainParticipant failed to advertise local reader endpoint");
@@ -745,22 +482,17 @@ public sealed class DomainParticipant : IDisposable
         _unregisteringLocalEndpoints = true;
         try
         {
-            LocalUserWriter[] writers;
-            LocalUserReader[] readers;
-            lock (_localEndpointsLock)
+            var endpoints = _userEndpoints.Snapshot();
+            foreach (var writer in endpoints.Writers)
             {
-                writers = _localUserWriters.Values.SelectMany(static list => list).ToArray();
-                readers = _localUserReaders.Values.SelectMany(static list => list).ToArray();
+                UnregisterLocalWriter(writer.Guid, writer);
+                writer.Dispose();
             }
-            foreach (var local in writers)
+            foreach (var reader in endpoints.Readers)
             {
-                UnregisterLocalWriter(local.EndpointData.EndpointGuid, local.Writer);
-                local.Writer.Dispose();
-            }
-            foreach (var local in readers)
-            {
-                UnregisterLocalReader(local.EndpointData.EndpointGuid, local.Reader);
-                local.Reader.Dispose();
+                var readerGuid = new Guid(GuidPrefix, reader.ReaderEntityId);
+                UnregisterLocalReader(readerGuid, reader);
+                reader.Dispose();
             }
         }
         finally
@@ -771,111 +503,19 @@ public sealed class DomainParticipant : IDisposable
 
     private void UnregisterLocalWriter(Guid endpointGuid, StatefulWriter writerToRemove)
     {
-        DiscoveredEndpointData? endpoint = null;
-        bool hasRemainingEndpoint = false;
-        LocalUserReader[] matchedLocalReaders = Array.Empty<LocalUserReader>();
-        lock (_localEndpointsLock)
+        var result = _userEndpoints.UnregisterWriter(endpointGuid, writerToRemove);
+        if (result.ShouldAdvertise)
         {
-            for (int i = 0; i < _localWriters.Count; i++)
-            {
-                if (!_localWriters[i].EndpointGuid.Equals(endpointGuid))
-                {
-                    continue;
-                }
-                endpoint = _localWriters[i];
-                _localWriters.RemoveAt(i);
-                break;
-            }
-            if (endpoint is not null
-                && _localUserWriters.TryGetValue(endpoint.TopicName, out var writers))
-            {
-                for (int i = 0; i < writers.Count; i++)
-                {
-                    if (!ReferenceEquals(writers[i].Writer, writerToRemove))
-                    {
-                        continue;
-                    }
-                    writers.RemoveAt(i);
-                    break;
-                }
-                hasRemainingEndpoint = writers.Any(w => w.EndpointData.EndpointGuid.Equals(endpointGuid));
-                if (writers.Count == 0)
-                {
-                    _localUserWriters.Remove(endpoint.TopicName);
-                }
-                RefreshLocalUserEndpointSnapshotsLocked();
-                matchedLocalReaders = _localUserReaders.TryGetValue(endpoint.TopicName, out var readers)
-                    ? readers.ToArray()
-                    : Array.Empty<LocalUserReader>();
-            }
-        }
-
-        if (endpoint is null)
-        {
-            return;
-        }
-        foreach (var localReader in matchedLocalReaders)
-        {
-            localReader.Reader.UnmatchWriter(endpointGuid);
-        }
-        if (!hasRemainingEndpoint)
-        {
-            WaitForSedpUnregister(_sedpPublicationsWriter.UnregisterEndpointAsync(endpoint));
+            WaitForSedpUnregister(_sedpPublicationsWriter.UnregisterEndpointAsync(result.Endpoint!));
         }
     }
 
     private void UnregisterLocalReader(Guid endpointGuid, StatelessReader readerToRemove)
     {
-        DiscoveredEndpointData? endpoint = null;
-        bool hasRemainingEndpoint = false;
-        LocalUserWriter[] matchedLocalWriters = Array.Empty<LocalUserWriter>();
-        lock (_localEndpointsLock)
+        var result = _userEndpoints.UnregisterReader(endpointGuid, readerToRemove);
+        if (result.ShouldAdvertise)
         {
-            for (int i = 0; i < _localReaders.Count; i++)
-            {
-                if (!_localReaders[i].EndpointGuid.Equals(endpointGuid))
-                {
-                    continue;
-                }
-                endpoint = _localReaders[i];
-                _localReaders.RemoveAt(i);
-                break;
-            }
-            if (endpoint is not null
-                && _localUserReaders.TryGetValue(endpoint.TopicName, out var readers))
-            {
-                for (int i = 0; i < readers.Count; i++)
-                {
-                    if (!ReferenceEquals(readers[i].Reader, readerToRemove))
-                    {
-                        continue;
-                    }
-                    readers.RemoveAt(i);
-                    break;
-                }
-                hasRemainingEndpoint = readers.Any(r => r.EndpointData.EndpointGuid.Equals(endpointGuid));
-                if (readers.Count == 0)
-                {
-                    _localUserReaders.Remove(endpoint.TopicName);
-                }
-                RefreshLocalUserEndpointSnapshotsLocked();
-                matchedLocalWriters = _localUserWriters.TryGetValue(endpoint.TopicName, out var writers)
-                    ? writers.ToArray()
-                    : Array.Empty<LocalUserWriter>();
-            }
-        }
-
-        if (endpoint is null)
-        {
-            return;
-        }
-        foreach (var localWriter in matchedLocalWriters)
-        {
-            localWriter.Writer.UnmatchReader(endpointGuid);
-        }
-        if (!hasRemainingEndpoint)
-        {
-            WaitForSedpUnregister(_sedpSubscriptionsWriter.UnregisterEndpointAsync(endpoint));
+            WaitForSedpUnregister(_sedpSubscriptionsWriter.UnregisterEndpointAsync(result.Endpoint!));
         }
     }
 
@@ -897,18 +537,6 @@ public sealed class DomainParticipant : IDisposable
         {
             _options.Logger.Warn("DomainParticipant failed to send SEDP unregister", ex);
         }
-    }
-
-    private void RefreshLocalUserEndpointSnapshotsLocked()
-    {
-        _localUserWriterSnapshot = _localUserWriters.Values
-            .SelectMany(static list => list)
-            .Select(static local => local.Writer)
-            .ToArray();
-        _localUserReaderSnapshot = _localUserReaders.Values
-            .SelectMany(static list => list)
-            .Select(static local => local.Reader)
-            .ToArray();
     }
 
     private async Task RunSedpOperationAsync(
