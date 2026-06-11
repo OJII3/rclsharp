@@ -75,7 +75,7 @@ public sealed class SpdpBuiltinParticipantReader : IDisposable
         Stop();
     }
 
-    private void OnPacketReceived(ReadOnlyMemory<byte> packet, Locator source)
+    public void OnPacketReceived(ReadOnlyMemory<byte> packet, Locator source)
     {
         try
         {
