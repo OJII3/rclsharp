@@ -149,7 +149,7 @@ git add docs/unity-verification.md docs/superpowers/plans/2026-06-13-unity-verif
 git commit -m "docs(unity): IL2CPP Player 検証手順を追加"
 ```
 
-- [ ] **Step 3: 回帰検証を実行する**
+- [x] **Step 3: 回帰検証を実行する**
 
 Run:
 
@@ -165,7 +165,7 @@ git diff --check
 
 Expected: すべて exit 0、Unity / .NET テスト失敗 0、Unity package meta の不足・orphan なし。
 
-- [ ] **Step 4: 差分と成果物を確認する**
+- [x] **Step 4: 差分と成果物を確認する**
 
 Run:
 `git status --short && git log --oneline main..HEAD && find artifacts/unity -maxdepth 2 -type f | sort`
